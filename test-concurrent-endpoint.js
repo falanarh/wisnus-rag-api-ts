@@ -38,13 +38,13 @@ function measureExecutionTime(fn) {
   });
 }
 
-// Single request test
-async function makeSingleRequest(question, requestId) {
+// Single request test using concurrent-test endpoint
+async function makeSingleConcurrentRequest(question, requestId) {
   try {
-    console.log(`🚀 Request ${requestId}: Starting request for "${question.substring(0, 30)}..."`);
+    console.log(`🚀 Request ${requestId}: Starting concurrent test request for "${question.substring(0, 30)}..."`);
     
     const response = await measureExecutionTime(() => 
-      axios.post(`${API_BASE_URL}/api/rag/ask`, {
+      axios.post(`${API_BASE_URL}/api/rag/concurrent-test`, {
         question: question
       }, {
         timeout: TIMEOUT
@@ -92,9 +92,9 @@ async function makeSingleRequest(question, requestId) {
   }
 }
 
-// Concurrent requests test
-async function testConcurrentRequests(numRequests = CONCURRENT_REQUESTS) {
-  console.log(`\n🧪 Testing ${numRequests} concurrent requests...\n`);
+// Concurrent requests test using concurrent-test endpoint
+async function testConcurrentEndpointRequests(numRequests = CONCURRENT_REQUESTS) {
+  console.log(`\n🧪 Testing ${numRequests} concurrent requests using /concurrent-test endpoint...\n`);
   
   const startTime = Date.now();
   const requests = [];
@@ -102,7 +102,7 @@ async function testConcurrentRequests(numRequests = CONCURRENT_REQUESTS) {
   // Create array of promises for concurrent execution
   for (let i = 1; i <= numRequests; i++) {
     const question = getRandomQuestion();
-    requests.push(makeSingleRequest(question, i));
+    requests.push(makeSingleConcurrentRequest(question, i));
   }
   
   try {
@@ -135,8 +135,8 @@ async function testConcurrentRequests(numRequests = CONCURRENT_REQUESTS) {
       : 0;
     
     // Print summary
-    console.log('\n📊 CONCURRENT TEST RESULTS');
-    console.log('=' .repeat(50));
+    console.log('\n📊 CONCURRENT ENDPOINT TEST RESULTS');
+    console.log('=' .repeat(60));
     console.log(`Total Requests: ${numRequests}`);
     console.log(`Successful: ${successfulRequests.length}`);
     console.log(`Failed: ${failedRequests.length}`);
@@ -154,7 +154,7 @@ async function testConcurrentRequests(numRequests = CONCURRENT_REQUESTS) {
     
     // Print detailed results
     console.log('\n📋 DETAILED RESULTS');
-    console.log('=' .repeat(50));
+    console.log('=' .repeat(60));
     
     successfulRequests.forEach(req => {
       console.log(`✅ Request ${req.requestId}: ${req.executionTime}ms | ${req.contextCount} docs | ${req.answerLength} chars`);
@@ -177,103 +177,49 @@ async function testConcurrentRequests(numRequests = CONCURRENT_REQUESTS) {
     };
     
   } catch (error) {
-    console.error('❌ Concurrent test failed:', error.message);
+    console.error('❌ Concurrent endpoint test failed:', error.message);
     throw error;
   }
 }
 
-// Sequential requests test for comparison
-async function testSequentialRequests(numRequests = CONCURRENT_REQUESTS) {
-  console.log(`\n🧪 Testing ${numRequests} sequential requests for comparison...\n`);
+// Comparison test between regular /ask and /concurrent-test endpoints
+async function compareEndpoints(numRequests = 5) {
+  console.log('\n🔄 COMPARING /ask vs /concurrent-test ENDPOINTS\n');
   
-  const startTime = Date.now();
-  const results = [];
+  // Test regular /ask endpoint
+  console.log('📊 Testing /api/rag/ask endpoint...');
+  const askResults = await testConcurrentRequests(numRequests);
   
-  for (let i = 1; i <= numRequests; i++) {
-    const question = getRandomQuestion();
-    const result = await makeSingleRequest(question, i);
-    results.push(result);
-  }
+  // Wait between tests
+  console.log('\n⏳ Waiting 3 seconds before testing concurrent endpoint...');
+  await new Promise(resolve => setTimeout(resolve, 3000));
   
-  const endTime = Date.now();
-  const totalTime = endTime - startTime;
+  // Test /concurrent-test endpoint
+  console.log('\n📊 Testing /api/rag/concurrent-test endpoint...');
+  const concurrentResults = await testConcurrentEndpointRequests(numRequests);
   
-  const successfulRequests = results.filter(r => r.status === 'success');
-  const successRate = (successfulRequests.length / numRequests) * 100;
-  const avgExecutionTime = successfulRequests.length > 0 
-    ? successfulRequests.reduce((sum, req) => sum + req.executionTime, 0) / successfulRequests.length 
-    : 0;
-  
-  console.log('\n📊 SEQUENTIAL TEST RESULTS');
-  console.log('=' .repeat(50));
-  console.log(`Total Requests: ${numRequests}`);
-  console.log(`Successful: ${successfulRequests.length}`);
-  console.log(`Success Rate: ${successRate.toFixed(1)}%`);
-  console.log(`Total Time: ${totalTime}ms`);
-  console.log(`Average Execution Time: ${avgExecutionTime.toFixed(0)}ms`);
-  console.log(`Throughput: ${(numRequests / (totalTime / 1000)).toFixed(2)} requests/second`);
+  // Print comparison
+  console.log('\n📊 ENDPOINT COMPARISON RESULTS');
+  console.log('=' .repeat(80));
+  console.log('Metric          | /ask Endpoint | /concurrent-test | Difference');
+  console.log('-' .repeat(80));
+  console.log(`Success Rate    | ${askResults.successRate.toFixed(1)}%        | ${concurrentResults.successRate.toFixed(1)}%           | ${(concurrentResults.successRate - askResults.successRate).toFixed(1)}%`);
+  console.log(`Avg Time (ms)   | ${askResults.avgExecutionTime.toFixed(0)}ms        | ${concurrentResults.avgExecutionTime.toFixed(0)}ms           | ${(concurrentResults.avgExecutionTime - askResults.avgExecutionTime).toFixed(0)}ms`);
+  console.log(`Throughput      | ${askResults.throughput.toFixed(2)} req/s    | ${concurrentResults.throughput.toFixed(2)} req/s       | ${(concurrentResults.throughput - askResults.throughput).toFixed(2)} req/s`);
+  console.log(`Total Time      | ${askResults.totalTime}ms        | ${concurrentResults.totalTime}ms           | ${concurrentResults.totalTime - askResults.totalTime}ms`);
   
   return {
-    totalRequests: numRequests,
-    successful: successfulRequests.length,
-    totalTime,
-    avgExecutionTime,
-    throughput: numRequests / (totalTime / 1000)
+    askEndpoint: askResults,
+    concurrentEndpoint: concurrentResults
   };
 }
 
-// Load testing with increasing concurrent requests
-async function loadTest() {
-  console.log('\n🔥 LOAD TESTING - Increasing Concurrent Requests\n');
-  
-  const testSizes = [1, 3, 5, 8, 10];
-  const results = [];
-  
-  for (const size of testSizes) {
-    console.log(`\n📈 Testing with ${size} concurrent requests...`);
-    try {
-      const result = await testConcurrentRequests(size);
-      results.push({ ...result, concurrentRequests: size });
-      
-      // Wait between tests to avoid overwhelming the server
-      if (size < testSizes[testSizes.length - 1]) {
-        console.log('⏳ Waiting 5 seconds before next test...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      }
-    } catch (error) {
-      console.error(`❌ Load test failed for ${size} requests:`, error.message);
-      results.push({ 
-        concurrentRequests: size, 
-        error: error.message,
-        successRate: 0 
-      });
-    }
-  }
-  
-  // Print load test summary
-  console.log('\n📊 LOAD TEST SUMMARY');
-  console.log('=' .repeat(60));
-  console.log('Concurrent | Success Rate | Avg Time | Throughput');
-  console.log('Requests   | (%)          | (ms)     | (req/s)');
-  console.log('-' .repeat(60));
-  
-  results.forEach(result => {
-    if (result.error) {
-      console.log(`${result.concurrentRequests.toString().padEnd(11)} | ${'ERROR'.padEnd(12)} | ${'N/A'.padEnd(8)} | ${'N/A'.padEnd(8)}`);
-    } else {
-      console.log(`${result.concurrentRequests.toString().padEnd(11)} | ${result.successRate.toFixed(1).padEnd(12)} | ${result.avgExecutionTime.toFixed(0).padEnd(8)} | ${result.throughput.toFixed(2).padEnd(8)}`);
-    }
-  });
-  
-  return results;
-}
-
-// Main test runner
-async function runAllTests() {
-  console.log('🚀 Starting Comprehensive API Performance Tests\n');
+// Main test runner for concurrent endpoint
+async function runConcurrentEndpointTests() {
+  console.log('🚀 Starting Concurrent Endpoint Performance Tests\n');
   
   try {
-    // Test 1: Health check with better error handling
+    // Test 1: Health check
     console.log('1️⃣ Testing health check...');
     try {
       const healthResponse = await axios.get(`${API_BASE_URL}/api/rag/health`, {
@@ -287,49 +233,36 @@ async function runAllTests() {
         console.error('   2. Server is listening on port 7001');
         console.error('   3. No firewall blocking the connection');
         throw new Error('Server connection failed');
-      } else if (error.response) {
-        console.error('❌ Server responded with error:', error.response.status, error.response.data);
-        throw new Error(`Server error: ${error.response.status}`);
       } else {
         console.error('❌ Health check failed:', error.message);
         throw error;
       }
     }
     
-    // Test 2: Single request baseline
-    console.log('\n2️⃣ Testing single request baseline...');
-    const singleResult = await makeSingleRequest('apa yang dimaksud dengan ekowisata?', 'BASELINE');
-    console.log(`✅ Baseline request: ${singleResult.executionTime}ms`);
+    // Test 2: Single concurrent endpoint request
+    console.log('\n2️⃣ Testing single concurrent endpoint request...');
+    const singleResult = await makeSingleConcurrentRequest('apa yang dimaksud dengan ekowisata?', 'BASELINE');
+    console.log(`✅ Concurrent endpoint baseline: ${singleResult.executionTime}ms`);
     
-    // Test 3: Sequential requests
-    console.log('\n3️⃣ Testing sequential requests...');
-    const sequentialResult = await testSequentialRequests(5);
+    // Test 3: Multiple concurrent requests
+    console.log('\n3️⃣ Testing multiple concurrent requests...');
+    const concurrentResult = await testConcurrentEndpointRequests(5);
     
-    // Test 4: Concurrent requests
-    console.log('\n4️⃣ Testing concurrent requests...');
-    const concurrentResult = await testConcurrentRequests(5);
-    
-    // Test 5: Load testing
-    console.log('\n5️⃣ Running load test...');
-    const loadResults = await loadTest();
+    // Test 4: Endpoint comparison
+    console.log('\n4️⃣ Comparing endpoints...');
+    const comparisonResult = await compareEndpoints(5);
     
     // Final summary
-    console.log('\n🎉 ALL TESTS COMPLETED!');
-    console.log('=' .repeat(50));
+    console.log('\n🎉 CONCURRENT ENDPOINT TESTS COMPLETED!');
+    console.log('=' .repeat(60));
     console.log('Performance Summary:');
     console.log(`- Single Request: ${singleResult.executionTime}ms`);
-    console.log(`- Sequential (5 req): ${sequentialResult.totalTime}ms (${sequentialResult.throughput.toFixed(2)} req/s)`);
     console.log(`- Concurrent (5 req): ${concurrentResult.totalTime}ms (${concurrentResult.throughput.toFixed(2)} req/s)`);
-    console.log(`- Concurrent Success Rate: ${concurrentResult.successRate.toFixed(1)}%`);
-    
-    // Performance comparison
-    const speedup = sequentialResult.totalTime / concurrentResult.totalTime;
-    console.log(`- Concurrent Speedup: ${speedup.toFixed(2)}x faster than sequential`);
+    console.log(`- Success Rate: ${concurrentResult.successRate.toFixed(1)}%`);
     
   } catch (error) {
-    console.error('\n❌ Test suite failed:', error.message);
+    console.error('\n❌ Concurrent endpoint test suite failed:', error.message);
     
-    // Provide helpful troubleshooting information
     console.error('\n🔧 Troubleshooting Guide:');
     console.error('1. Check if server is running: npm run dev');
     console.error('2. Check if RAG is initialized: POST /api/rag/initialize');
@@ -341,39 +274,17 @@ async function runAllTests() {
   }
 }
 
+// Import the regular test functions for comparison
+const { testConcurrentRequests } = require('./test-concurrent');
+
 // Run tests if this file is executed directly
 if (require.main === module) {
-  // Check if command line arguments are provided
-  const args = process.argv.slice(2);
-  
-  if (args.length > 0) {
-    // If arguments provided, run only concurrent test with specified number of requests
-    const numRequests = parseInt(args[0]) || CONCURRENT_REQUESTS;
-    console.log(`🚀 Running concurrent test with ${numRequests} requests...\n`);
-    
-    // Run health check first
-    axios.get(`${API_BASE_URL}/api/rag/health`, { timeout: 10000 })
-      .then(() => {
-        console.log('✅ Health check passed');
-        return testConcurrentRequests(numRequests);
-      })
-      .then((result) => {
-        console.log('\n🎉 Concurrent test completed!');
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error('❌ Test failed:', error.message);
-        process.exit(1);
-      });
-  } else {
-    // If no arguments, run full test suite
-    runAllTests().catch(console.error);
-  }
+  runConcurrentEndpointTests().catch(console.error);
 }
 
 module.exports = {
-  testConcurrentRequests,
-  testSequentialRequests,
-  loadTest,
-  makeSingleRequest
+  testConcurrentEndpointRequests,
+  makeSingleConcurrentRequest,
+  compareEndpoints,
+  runConcurrentEndpointTests
 }; 

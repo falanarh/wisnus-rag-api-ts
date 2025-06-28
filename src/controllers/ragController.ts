@@ -135,4 +135,66 @@ export const askQuestion = async (req: Request, res: Response) => {
       });
     }
   }
+};
+
+// Concurrent test endpoint
+export const concurrentTest = async (req: Request, res: Response) => {
+  try {
+    const { numRequests = 5 } = req.body;
+    
+    // Import the test functions directly from test-concurrent.js
+    const { testConcurrentRequests } = require('../../test-concurrent');
+    
+    console.log(`🧪 Executing concurrent test with ${numRequests} requests...`);
+    
+    // Capture console output
+    const originalConsoleLog = console.log;
+    const outputLines: string[] = [];
+    
+    console.log = (...args: any[]) => {
+      const message = args.join(' ');
+      outputLines.push(message);
+      originalConsoleLog(...args);
+    };
+    
+    try {
+      // Run the concurrent test
+      const results = await testConcurrentRequests(numRequests);
+      
+      // Restore console.log
+      console.log = originalConsoleLog;
+      
+      // Return the test results as JSON response
+      res.json({
+        success: true,
+        testType: 'concurrent',
+        numRequests: numRequests,
+        output: outputLines.join('\n'),
+        results: results,
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (testError: any) {
+      // Restore console.log
+      console.log = originalConsoleLog;
+      
+      console.error('❌ Concurrent test failed:', testError);
+      res.status(500).json({
+        success: false,
+        error: 'Concurrent test execution failed',
+        details: testError.message,
+        output: outputLines.join('\n'),
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+  } catch (error: any) {
+    console.error('Error in concurrentTest:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to execute concurrent test',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 }; 
