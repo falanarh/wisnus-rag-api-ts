@@ -4,6 +4,7 @@ import { VectorStoreInitializer } from '../services/vectorStore';
 import { createRagChain, LLMHolder } from '../services/ragService';
 import { getCurrentLlm } from '../config/llm';
 import { QuestionRequest } from '../models/questionRequest';
+import { MongoClient } from 'mongodb';
 
 let ragChain: any = null;
 let ragVectorStore: any = null;
@@ -12,46 +13,42 @@ let llmHolder: LLMHolder | null = null;
 // Internal initialization function that doesn't require response object
 export const initializeRagSystem = async (): Promise<void> => {
   try {
-    // Pastikan untuk await pemanggilan getCurrentLlm() agar instance yang dihasilkan bukan coroutine
+    console.log('🚀 Initializing RAG system...');
+    
+    // Initialize LLM
     const llm = await getCurrentLlm();
     llmHolder = new LLMHolder(llm);
+    console.log('✅ LLM initialized');
     
-    // Proses dokumen PDF
+    // Process markdown documents
     const processor = new MarkdownProcessor();
     const docs = processor.processMarkdowns();
+    console.log(`📚 Processed ${docs.length} document chunks`);
     
+    // Initialize vector store
     const vectorStoreInitializer = new VectorStoreInitializer();
-    ragVectorStore = vectorStoreInitializer.initializeVectorStore();
+    const ragVectorStore = await vectorStoreInitializer.initializeVectorStore();
     
-    // Check if collection is empty and add documents
-    const collection = ragVectorStore.collection;
-    const count = await collection.countDocuments({});
-    if (count === 0) {
-      await ragVectorStore.addDocuments(docs);
-    }
-
-    // Buat RAG chain dengan vector_store dan llm_holder
+    // Add documents only if they don't exist (avoid duplicate embeddings)
+    const result = await vectorStoreInitializer.addDocumentsIfNotExists(docs);
+    console.log(`📊 Document addition result: ${result.added} added, ${result.skipped} skipped`);
+    
+    // Create RAG chain
     ragChain = createRagChain(ragVectorStore, llmHolder);
+    console.log('✅ RAG system initialized successfully!');
     
-    console.log('RAG system initialized successfully');
   } catch (error: any) {
-    console.error(`Initialization failed: ${error.message}`);
+    console.error('❌ Initialization failed:', error.message);
     throw error;
   }
 };
 
-export const healthCheck = async (_req: Request, res: Response): Promise<void> => {
-  try {
-    res.json({
-      status: 'healthy',
-      message: 'Wisnus RAG API is running',
-      rag_initialized: ragChain !== null,
-      vector_store_ready: ragVectorStore !== null,
-      llm_ready: llmHolder !== null
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: `Health check failed: ${error.message}` });
-  }
+export const getHealthStatus = async (_req: Request, res: Response): Promise<void> => {
+  res.json({ 
+    status: 'healthy',
+    ragInitialized: !!ragChain,
+    timestamp: new Date().toISOString()
+  });
 };
 
 export const initializeRag = async (_req: Request, res: Response): Promise<void> => {
@@ -131,64 +128,71 @@ export const askQuestion = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// Concurrent test endpoint
-export const concurrentTest = async (req: Request, res: Response): Promise<void> => {
+export const runConcurrentTest = async (req: Request, res: Response): Promise<void> => {
   try {
     const { numRequests = 5 } = req.body;
     
-    // Import the test functions directly from test-concurrent.js
-    const { testConcurrentRequests } = require('../../test-concurrent');
+    // Import and run the test function
+    const { runConcurrentTest } = require('../../test-concurrent.js');
+    const result = await runConcurrentTest(numRequests);
     
-    console.log(`🧪 Executing concurrent test with ${numRequests} requests...`);
-    
-    // Capture console output
-    const originalConsoleLog = console.log;
-    const outputLines: string[] = [];
-    
-    console.log = (...args: any[]) => {
-      const message = args.join(' ');
-      outputLines.push(message);
-      originalConsoleLog(...args);
-    };
-    
-    try {
-      // Run the concurrent test
-      const results = await testConcurrentRequests(numRequests);
-      
-      // Restore console.log
-      console.log = originalConsoleLog;
-      
-      // Return the test results as JSON response
-      res.json({
-        success: true,
-        testType: 'concurrent',
-        numRequests: numRequests,
-        output: outputLines.join('\n'),
-        results: results,
-        timestamp: new Date().toISOString()
-      });
-      
-    } catch (testError: any) {
-      // Restore console.log
-      console.log = originalConsoleLog;
-      
-      console.error('❌ Concurrent test failed:', testError);
-      res.status(500).json({
-        success: false,
-        error: 'Concurrent test execution failed',
-        details: testError.message,
-        output: outputLines.join('\n'),
-        timestamp: new Date().toISOString()
-      });
-    }
+    res.json({
+      success: true,
+      testType: 'concurrent',
+      numRequests,
+      result
+    });
     
   } catch (error: any) {
-    console.error('Error in concurrentTest:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to execute concurrent test',
-      details: error.message,
+    console.error('Error in concurrent test:', error);
+    res.status(500).json({ 
+      error: 'Failed to run concurrent test',
+      details: error.message 
+    });
+  }
+};
+
+export const getDatabaseStatus = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const vectorStoreInitializer = new VectorStoreInitializer();
+    
+    // Get database connection
+    const client = new MongoClient(vectorStoreInitializer['mongodbUri']);
+    await client.connect();
+    
+    const collection = client.db(vectorStoreInitializer['mongodbDbName'])
+                           .collection(vectorStoreInitializer['mongodbCollectionName']);
+    
+    // Get total documents count
+    const totalCount = await collection.countDocuments({});
+    
+    // Get documents by source
+    const pipeline = [
+      {
+        $group: {
+          _id: '$metadata.source',
+          count: { $sum: 1 }
+        }
+      }
+    ];
+    
+    const sourceStats = await collection.aggregate(pipeline).toArray();
+    
+    await client.close();
+    
+    res.json({
+      status: 'success',
+      totalDocuments: totalCount,
+      sourceBreakdown: sourceStats,
+      ragInitialized: !!ragChain,
       timestamp: new Date().toISOString()
+    });
+    
+  } catch (error: any) {
+    console.error('Error getting database status:', error);
+    res.status(500).json({ 
+      error: 'Failed to get database status',
+      details: error.message 
     });
   }
 }; 

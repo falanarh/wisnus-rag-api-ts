@@ -20,10 +20,11 @@ Anda adalah asisten yang hanya boleh menjawab pertanyaan berdasarkan potongan ko
 6. Jika jawaban terdiri dari lebih dari satu kalimat, pastikan kalimat-kalimat tersebut saling berkaitan.
 7. Hindari memberikan informasi terkait kode atau referensi yang tidak dapat diketahui oleh pengguna.
 8. Jika konteks yang diberikan tidak menjelaskan pertanyaan secara spesifik, saya izinkan Anda memberikan jawaban menggunakan pengetahuan umum yang Anda miliki dan beri teks "(Sumber: Pengetahuan umum)." tetapi pastikan Anda tidak menjelaskan bahwa konteks yang dimiliki tidak menjawab pertanyaan secara spesifik.
-9. Jika Anda dapat memberikan jawaban sesuai konteks yang tersedia, berikan teks "(Sumber: Badan Pusat Statistik)." pada akhir jawaban.
+9. PASTIKAN !!! Jika Anda dapat memberikan jawaban sesuai konteks yang tersedia, berikan teks "(Sumber: Badan Pusat Statistik)." pada akhir jawaban.
 10. Akhiri setiap jawaban dengan "Terima kasih sudah bertanya!" tanpa membuat baris baru.
 11. Jika ada teks "(Sumber: Badan Pusat Statistik)" dan "Terima kasih sudah bertanya!" pisahkan keduanya dengan ". " (titik spasi).
-12. Hanya diperbolehkan menyertakan dua teks sumber saja, yaitu "(Sumber: Badan Pusat Statistik)" atau "(Sumber: Pengetahuan umum)" jangan sampai menuliskan "(Sumber: Dokumen [nomor])".    
+12. SANGAT PENTING !!! Hanya diperbolehkan menyertakan dua teks sumber saja, yaitu "(Sumber: Badan Pusat Statistik)" atau "(Sumber: Pengetahuan umum) dan harus ada salah satu teks sumber tersebut".   
+13. DAN INGAT !!! DILARANG menuliskan "(Sumber: Dokumen [nomor])". 
 
 Pengetahuan yang Anda miliki: {context}
 
@@ -66,6 +67,17 @@ export async function safeLlmInvoke(llmHolder: LLMHolder, messages: any): Promis
   }
 }
 
+// Helper function untuk membersihkan teks sumber yang tidak diharapkan
+export function cleanSourceText(text: string): string {
+  // Replace "(Sumber: Dokumen [nomor])" with "(Sumber: Badan Pusat Statistik)"
+  const cleanedText = text.replace(/\(Sumber: Dokumen\s*\d+\)/g, '(Sumber: Badan Pusat Statistik)');
+  
+  // Also replace any other variations of document source
+  const finalText = cleanedText.replace(/\(Sumber: Dokumen\s*\[.*?\]\)/g, '(Sumber: Badan Pusat Statistik)');
+  
+  return finalText;
+}
+
 export async function multiQueryRetrievalChain(
   state: State,
   vectorStore: MongoDBAtlasVectorSearch,
@@ -85,7 +97,8 @@ export async function multiQueryRetrievalChain(
         (Contoh: "Apa itu eko wisata?")
     - Query 3: Format "Jelaskan tentang [kata kunci]?" 
         (Contoh: "Jelaskan tentang eko wisata?")
-    - Query 4: Bentuk pertanyaan yang mendekati pertanyaan asli dengan menghilangkan kata-kata yang tidak penting dari pertanyaan asli yang dapat menganggu pencarian seperti "dalam survei ini", "sebenarnya", "coba" atau "gitu", dan lain-lain.
+    - Query 4: Format "Definisi dari [kata kunci]" (TANPA TANDA TANYA)
+        (Contoh: "Definisi dari eko wisata")
     3. Pastikan Anda membuat tepat EMPAT kueri.
   `;
 
@@ -116,25 +129,57 @@ export async function multiQueryRetrievalChain(
   
   const text = response.text();
   
-  // Parse the response to extract queries (simplified parsing)
-  const queries = text.split('\n').filter((line: string) => line.trim() && line.includes('?')).slice(0, 4);
+  // Parse the response to extract queries (improved parsing)
+  const lines = text.split('\n').map((line: string) => line.trim()).filter((line: string) => line.length > 0);
+  const queries: string[] = [];
   
-  if (queries.length < 4) {
-    // Fallback queries if LLM doesn't generate enough
-    const fallbackQueries = [
-      `${state.question}?`,
-      `Apa itu ${state.question}?`,
-      `Jelaskan tentang ${state.question}?`,
-      state.question
-    ];
-    queries.push(...fallbackQueries.slice(queries.length));
+  for (const line of lines) {
+    // Look for lines that contain "Query" followed by a number
+    const queryMatch = line.match(/Query\s*\d+:\s*(.+)/i);
+    if (queryMatch && queryMatch[1]) {
+      const query = queryMatch[1].trim();
+      // Clean up the query - remove quotes and extra formatting
+      const cleanQuery = query.replace(/^["']|["']$/g, '').replace(/^\*\s*/, '').trim();
+      if (cleanQuery && cleanQuery.length > 0) {
+        queries.push(cleanQuery);
+      }
+    }
   }
+  
+  // If we don't have enough queries, use fallback queries
+  if (queries.length < 4) {
+    console.log(`⚠️ Only got ${queries.length} queries from LLM, using fallback queries`);
+    
+    // Extract keywords from the original question
+    const keywords = state.question
+      .replace(/[^\w\s]/g, '')
+      .split(' ')
+      .filter(word => word.length > 3)
+      .slice(0, 3);
+    
+    const mainKeyword = keywords[0] || state.question.split(' ')[0];
+    
+    const fallbackQueries = [
+      `${mainKeyword}?`,
+      `Apa itu ${mainKeyword}?`,
+      `Jelaskan tentang ${mainKeyword}?`,
+      `Definisi dari ${mainKeyword}`
+    ];
+    
+    // Add fallback queries to fill up to 4
+    for (let i = queries.length; i < 4; i++) {
+      queries.push(fallbackQueries[i - queries.length] || fallbackQueries[0]);
+    }
+  }
+  
+  console.log(`🔍 Generated queries: ${queries.join(', ')}`);
 
   // Fetch results for each query
   const allResults: RetrievedDocument[] = [];
   
   for (const query of queries) {
     try {
+      console.log(`🔎 Searching for: "${query}"`);
       const results = await vectorStore.similaritySearch(query, topK);
       const processedDocs = results.map((doc: any) => ({
         document: {
@@ -144,8 +189,9 @@ export async function multiQueryRetrievalChain(
         similarityScore: 0.0
       }));
       allResults.push(...processedDocs);
+      console.log(`✅ Found ${results.length} results for query: "${query}"`);
     } catch (error) {
-      console.error(`Error fetching results for query: ${query}`, error);
+      console.error(`❌ Error fetching results for query: "${query}"`, error);
     }
   }
 
@@ -161,6 +207,7 @@ export async function multiQueryRetrievalChain(
     }
   }
 
+  console.log(`📊 Total unique results: ${uniqueResults.length}`);
   return uniqueResults;
 }
 
@@ -278,9 +325,12 @@ export async function generate(state: State, llmHolder: LLMHolder): Promise<Stat
     .replace('{question}', state.question);
 
   const result = await safeLlmInvoke(llmHolder, prompt);
-  const answer = result.response.text();
+  const rawAnswer = result.response.text();
   
-  return { ...state, answer };
+  // Clean the answer text to replace unwanted source references
+  const cleanedAnswer = cleanSourceText(rawAnswer);
+  
+  return { ...state, answer: cleanedAnswer };
 }
 
 export function createRagChain(
@@ -328,4 +378,4 @@ export function createRagChain(
       };
     }
   };
-} 
+}
