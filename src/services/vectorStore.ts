@@ -17,7 +17,7 @@ export class VectorStoreInitializer {
     this.indexName = 'vector_index';
   }
 
-  initializeVectorStore(): MongoDBAtlasVectorSearch {
+  async initializeVectorStore(): Promise<MongoDBAtlasVectorSearch> {
     if (!this.geminiApiKey || !this.mongodbUri || 
         !this.mongodbDbName || !this.mongodbCollectionName) {
       throw new Error('Missing required environment variables');
@@ -29,25 +29,32 @@ export class VectorStoreInitializer {
       apiKey: this.geminiApiKey,
     });
 
-    // Connect to MongoDB with proper configuration
-    const client = new MongoClient(this.mongodbUri, {
-      serverSelectionTimeoutMS: 30000,
-      socketTimeoutMS: 30000,
-      connectTimeoutMS: 30000,
-    });
-    
-    const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+    try {
+      // Create MongoDB client
+      const client = new MongoClient(this.mongodbUri);
+      await client.connect();
+      console.log('✅ MongoDB connection successful');
+      
+      const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
 
-    // Cast collection to handle type mismatch between MongoDB versions
-    const typedCollection = collection as any;
-    typedCollection.timeoutMS = 30000;
+      // Create a collection wrapper with timeoutMS property
+      const collectionWithTimeout = {
+        ...collection,
+        timeoutMS: 30000
+      } as any;
 
-    // Initialize MongoDB Atlas Vector Store
-    const vectorStore = new MongoDBAtlasVectorSearch(embeddings, {
-      collection: typedCollection,
-      indexName: this.indexName,
-    });
+      // Initialize MongoDB Atlas Vector Store
+      const vectorStore = new MongoDBAtlasVectorSearch(embeddings, {
+        collection: collectionWithTimeout,
+        indexName: this.indexName,
+      });
 
-    return vectorStore;
+      console.log('✅ Vector store initialized successfully');
+      return vectorStore;
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize vector store:', error);
+      throw error;
+    }
   }
 } 

@@ -136,7 +136,7 @@ export async function multiQueryRetrievalChain(
   for (const query of queries) {
     try {
       const results = await vectorStore.similaritySearch(query, topK);
-      const processedDocs = results.map(doc => ({
+      const processedDocs = results.map((doc: any) => ({
         document: {
           pageContent: doc.pageContent,
           metadata: doc.metadata
@@ -301,32 +301,30 @@ export function createRagChain(
       }>; 
       answer: string; 
     }> {
-      let state: State = { question: input.question, context: [], answer: '' };
+      const state: State = { question: input.question, context: [], answer: '' };
       
-      // Retrieve
-      state = await retrieve(state, vectorStore, llmHolder);
+      // Retrieve relevant documents
+      const retrievedState = await retrieve(state, vectorStore, llmHolder);
       
-      // Rerank
-      state = await rerankNode(state, llmHolder);
+      // Rerank documents
+      const rerankedState = await rerankNode(retrievedState, llmHolder);
       
-      // Generate
-      state = await generate(state, llmHolder);
+      // Generate answer
+      const finalState = await generate(rerankedState, llmHolder);
       
-      // Transform context to match the required format
-      const transformedContext = state.context.map(doc => ({
-        document: {
-          id: null,
-          metadata: doc.document.metadata || {},
-          page_content: doc.document.pageContent,
-          type: "Document"
-        },
-        similarity_score: doc.similarityScore
-      }));
-      
-      return { 
-        question: state.question,
-        context: transformedContext,
-        answer: state.answer 
+      // Transform to expected output format
+      return {
+        question: finalState.question,
+        context: finalState.context.map(doc => ({
+          document: {
+            id: null,
+            metadata: doc.document.metadata,
+            page_content: doc.document.pageContent,
+            type: 'markdown'
+          },
+          similarity_score: doc.similarityScore
+        })),
+        answer: finalState.answer
       };
     }
   };
