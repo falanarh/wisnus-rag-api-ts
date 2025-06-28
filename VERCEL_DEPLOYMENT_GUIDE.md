@@ -115,7 +115,7 @@ TEST_RESULTS_DIR=./test-results
 
 #### **Optional Configuration**
 ```env
-LANGSMITH_TRACING=false
+# Add any additional configuration here
 ```
 
 ---

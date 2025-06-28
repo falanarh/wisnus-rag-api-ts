@@ -4,7 +4,8 @@ import {
   initializeRagSystem, 
   getHealthStatus, 
   runConcurrentTest,
-  getDatabaseStatus 
+  getDatabaseStatus,
+  getPipelineInfo
 } from '../controllers/ragController';
 
 const router = express.Router();
@@ -14,6 +15,9 @@ router.get('/health', getHealthStatus);
 
 // Database status endpoint
 router.get('/status', getDatabaseStatus);
+
+// Pipeline info endpoint
+router.get('/pipeline-info', getPipelineInfo);
 
 // Initialize RAG system
 router.post('/initialize', async (req, res) => {

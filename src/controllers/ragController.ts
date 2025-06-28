@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { MarkdownProcessor } from '../services/mdProcessor';
 import { VectorStoreInitializer } from '../services/vectorStore';
-import { createRagChain, LLMHolder } from '../services/ragService';
+import { createRagChain, LLMHolder, getRAGPipelineInfo } from '../services/ragService';
 import { getCurrentLlm } from '../config/llm';
 import { QuestionRequest } from '../models/questionRequest';
 import { MongoClient } from 'mongodb';
@@ -9,42 +9,9 @@ import { MongoClient } from 'mongodb';
 let ragChain: any = null;
 let ragVectorStore: any = null;
 let llmHolder: LLMHolder | null = null;
-let isInitializing: boolean = false;
-let lastInitializationCheck: number = 0;
-const INITIALIZATION_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 // Internal initialization function that doesn't require response object
-export const initializeRagSystem = async (force: boolean = false): Promise<void> => {
-  // Prevent concurrent initialization
-  if (isInitializing) {
-    console.log('⏳ RAG system is already initializing, waiting...');
-    while (isInitializing) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    return;
-  }
-
-  // Check if initialization is needed (unless forced)
-  if (!force) {
-    const now = Date.now();
-    if (now - lastInitializationCheck < INITIALIZATION_CHECK_INTERVAL) {
-      console.log('ℹ️ Skipping initialization check (recently checked)');
-      return;
-    }
-    
-    const vectorStoreInitializer = new VectorStoreInitializer();
-    const needsInit = await vectorStoreInitializer.isInitializationNeeded();
-    
-    if (!needsInit && ragChain) {
-      console.log('✅ RAG system already initialized and database has documents');
-      lastInitializationCheck = now;
-      return;
-    }
-  }
-
-  isInitializing = true;
-  lastInitializationCheck = Date.now();
-
+export const initializeRagSystem = async (): Promise<void> => {
   try {
     console.log('🚀 Initializing RAG system...');
     
@@ -73,8 +40,6 @@ export const initializeRagSystem = async (force: boolean = false): Promise<void>
   } catch (error: any) {
     console.error('❌ Initialization failed:', error.message);
     throw error;
-  } finally {
-    isInitializing = false;
   }
 };
 
@@ -86,20 +51,10 @@ export const getHealthStatus = async (_req: Request, res: Response): Promise<voi
   });
 };
 
-export const initializeRag = async (req: Request, res: Response): Promise<void> => {
+export const initializeRag = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const { force = false } = req.body;
-    
-    if (force) {
-      console.log('🔄 Force initialization requested');
-    }
-    
-    await initializeRagSystem(force);
-    res.json({ 
-      message: 'RAG system initialized',
-      force: force,
-      timestamp: new Date().toISOString()
-    });
+    await initializeRagSystem();
+    res.json({ message: 'RAG system initialized' });
   } catch (error: any) {
     res.status(500).json({ error: `Initialization failed: ${error.message}` });
   }
@@ -201,20 +156,35 @@ export const getDatabaseStatus = async (_req: Request, res: Response): Promise<v
   try {
     const vectorStoreInitializer = new VectorStoreInitializer();
     
-    // Get detailed database statistics
-    const stats = await vectorStoreInitializer.getDatabaseStats();
+    // Get database connection
+    const client = new MongoClient(vectorStoreInitializer['mongodbUri']);
+    await client.connect();
     
-    // Check if initialization is needed
-    const needsInit = await vectorStoreInitializer.isInitializationNeeded();
+    const collection = client.db(vectorStoreInitializer['mongodbDbName'])
+                           .collection(vectorStoreInitializer['mongodbCollectionName']);
+    
+    // Get total documents count
+    const totalCount = await collection.countDocuments({});
+    
+    // Get documents by source
+    const pipeline = [
+      {
+        $group: {
+          _id: '$metadata.source',
+          count: { $sum: 1 }
+        }
+      }
+    ];
+    
+    const sourceStats = await collection.aggregate(pipeline).toArray();
+    
+    await client.close();
     
     res.json({
       status: 'success',
-      totalDocuments: stats.totalDocuments,
-      sourceBreakdown: stats.sourceBreakdown,
-      lastUpdated: stats.lastUpdated,
+      totalDocuments: totalCount,
+      sourceBreakdown: sourceStats,
       ragInitialized: !!ragChain,
-      needsInitialization: needsInit,
-      isInitializing: isInitializing,
       timestamp: new Date().toISOString()
     });
     
@@ -222,6 +192,50 @@ export const getDatabaseStatus = async (_req: Request, res: Response): Promise<v
     console.error('Error getting database status:', error);
     res.status(500).json({ 
       error: 'Failed to get database status',
+      details: error.message 
+    });
+  }
+};
+
+export const getPipelineInfo = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { question } = req.query as { question: string };
+    
+    if (!question || question.trim() === '') {
+      res.status(400).json({ error: 'Question parameter is required' });
+      return;
+    }
+    
+    // Auto-initialize RAG system if not initialized
+    if (!ragVectorStore) {
+      console.log('🔄 RAG system not initialized. Auto-initializing...');
+      try {
+        await initializeRagSystem();
+        console.log('✅ RAG system auto-initialized successfully!');
+      } catch (initError: any) {
+        console.error('❌ Auto-initialization failed:', initError.message);
+        res.status(503).json({ 
+          error: 'RAG system is not ready. Please try again in a few moments.',
+          details: 'Auto-initialization failed',
+          retry_after: 30
+        });
+        return;
+      }
+    }
+    
+    const pipelineInfo = await getRAGPipelineInfo(ragVectorStore, question);
+    
+    res.json({
+      success: true,
+      question,
+      pipelineInfo,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error: any) {
+    console.error('Error getting pipeline info:', error);
+    res.status(500).json({ 
+      error: 'Failed to get pipeline information',
       details: error.message 
     });
   }

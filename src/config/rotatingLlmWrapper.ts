@@ -1,5 +1,5 @@
 import { LLMHolder } from '../services/ragService';
-import { getNextLlm, geminiKeys } from './llm';
+import { getNextLlm, geminiKeys, invokeWithRetry } from './llm';
 
 export class RotatingLlmWrapper {
   private llmHolder: LLMHolder;
@@ -14,9 +14,8 @@ export class RotatingLlmWrapper {
     
     while (attempts < maxAttempts) {
       try {
-        // Panggil LLM menggunakan instance yang ada di llm_holder
-        const model = this.llmHolder.llm.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
-        const result = await model.generateContent(messages);
+        // Use LangChain's invokeWithRetry for better error handling
+        const result = await invokeWithRetry(this.llmHolder.llm, messages);
         return result;
       } catch (error: any) {
         if (error.toString().includes('429')) {

@@ -14,7 +14,7 @@ export class MarkdownProcessor {
 
   processMarkdowns(directory?: string): Document[] {
     // Handle Vercel deployment path
-    let mdDir: string;
+    let mdDir: string | undefined;
     
     if (directory) {
       mdDir = path.resolve(directory);
