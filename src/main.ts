@@ -26,17 +26,20 @@ app.get('/', (_req, res) => {
 
 app.use('/api/rag', ragRoutes);
 
-// Initialize RAG system on startup
+// Initialize RAG system automatically on startup
 const startupEvent = async () => {
   try {
+    console.log('🚀 Initializing RAG system...');
     await initializeRagSystem();
     console.log('✅ RAG system initialized successfully!');
   } catch (error: any) {
     console.log(`❌ Failed to initialize RAG system: ${error.message}`);
+    console.log('⚠️ You may need to manually initialize via POST /api/rag/initialize');
   }
 };
 
-app.listen(PORT, () => {
+// Start server and initialize RAG system
+app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  startupEvent();
+  await startupEvent();
 }); 

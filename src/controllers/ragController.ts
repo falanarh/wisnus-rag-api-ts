@@ -64,17 +64,29 @@ export const initializeRag = async (_req: Request, res: Response): Promise<void>
 };
 
 export const askQuestion = async (req: Request, res: Response): Promise<void> => {
-  if (!ragChain) {
-    res.status(400).json({ error: 'RAG not initialized' });
-    return;
-  }
-  
   try {
     const { question } = req.body as QuestionRequest;
     
     if (!question || question.trim() === '') {
       res.status(400).json({ error: 'Question is required' });
       return;
+    }
+    
+    // Auto-initialize RAG system if not initialized
+    if (!ragChain) {
+      console.log('🔄 RAG system not initialized. Auto-initializing...');
+      try {
+        await initializeRagSystem();
+        console.log('✅ RAG system auto-initialized successfully!');
+      } catch (initError: any) {
+        console.error('❌ Auto-initialization failed:', initError.message);
+        res.status(503).json({ 
+          error: 'RAG system is not ready. Please try again in a few moments.',
+          details: 'Auto-initialization failed',
+          retry_after: 30
+        });
+        return;
+      }
     }
     
     const result = await ragChain.invoke({ question });

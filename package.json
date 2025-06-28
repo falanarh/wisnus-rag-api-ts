@@ -11,6 +11,7 @@
     "test:api": "node test-api.js",
     "test:concurrent": "node test-concurrent.js",
     "test:concurrent-endpoint": "node test-concurrent-endpoint.js",
+    "test:deployment": "node test-deployment.js",
     "test:stress": "node test-stress.js",
     "test:monitor": "node test-monitor.js",
     "test:all": "node run-all-tests.js",
