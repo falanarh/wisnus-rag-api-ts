@@ -224,6 +224,8 @@ export async function rerankNode(state: State, llmHolder: LLMHolder, similarityT
   const systemPrompt = `
     Anda adalah ahli dalam mengevaluasi relevansi dokumen terhadap pertanyaan. Tugas Anda adalah memberikan skor similarity (0.0 - 1.0) untuk setiap dokumen berdasarkan seberapa relevan dokumen tersebut terhadap pertanyaan yang diberikan.
 
+    PENTING: JANGAN MENGUBAH ISI DOKUMEN. Berikan skor berdasarkan dokumen yang ada tanpa menambah atau mengurangi teks.
+
     Pertimbangkan aspek berikut dalam penilaian:
     1. Relevansi topik dan konsep
     2. Kesesuaian informasi dengan pertanyaan
@@ -234,7 +236,7 @@ export async function rerankNode(state: State, llmHolder: LLMHolder, similarityT
     {
       "rerankedDocuments": [
         {
-          "document": "isi dokumen",
+          "document": "isi dokumen yang PERSIS sama dengan input",
           "similarityScore": 0.85
         }
       ]
@@ -248,7 +250,7 @@ export async function rerankNode(state: State, llmHolder: LLMHolder, similarityT
   const userPrompt = `
     - Pertanyaan:
     ${state.question}
-    - Dokumen untuk direrank:
+    - Dokumen untuk direrank (JANGAN UBAH ISI DOKUMEN, HANYA BERIKAN SKOR):
     ${docsStr}
   `;
 
@@ -293,23 +295,46 @@ export async function rerankNode(state: State, llmHolder: LLMHolder, similarityT
     }
   }
 
-  // Konversi hasil rerank ke format state semula
+  // Konversi hasil rerank ke format state semula dengan MEMPERTAHANKAN DOKUMEN ASLI
   const newContext: RetrievedDocument[] = [];
-  for (const doc of rerankResult.rerankedDocuments) {
+  
+  console.log(`🔄 Reranking ${state.context.length} documents...`);
+  
+  for (const rerankedDoc of rerankResult.rerankedDocuments) {
     // Lakukan filtering berdasarkan similarity score
-    if (doc.similarityScore < similarityThreshold) {
+    if (rerankedDoc.similarityScore < similarityThreshold) {
+      console.log(`❌ Filtered out document with score ${rerankedDoc.similarityScore.toFixed(3)}`);
       continue;
     }
-    const newDoc: Document = {
-      pageContent: doc.document,
-      metadata: { source: 'reranked', chunkId: 'unknown' }
-    };
-    newContext.push({
-      document: newDoc,
-      similarityScore: doc.similarityScore
-    });
+    
+    // Cari dokumen asli yang sesuai berdasarkan content
+    const originalDoc = state.context.find(doc => 
+      doc.document.pageContent === rerankedDoc.document
+    );
+    
+    if (originalDoc) {
+      // Gunakan dokumen asli dengan skor baru
+      newContext.push({
+        document: originalDoc.document, // PERTAHANKAN DOKUMEN ASLI
+        similarityScore: rerankedDoc.similarityScore
+      });
+      console.log(`✅ Preserved original document with new score: ${rerankedDoc.similarityScore.toFixed(3)}`);
+    } else {
+      // Jika tidak ditemukan, gunakan dokumen dari rerank (fallback)
+      const newDoc: Document = {
+        pageContent: rerankedDoc.document,
+        metadata: { source: 'reranked', chunkId: 'unknown' }
+      };
+      newContext.push({
+        document: newDoc,
+        similarityScore: rerankedDoc.similarityScore
+      });
+      console.log(`⚠️ Used reranked document (fallback) with score: ${rerankedDoc.similarityScore.toFixed(3)}`);
+    }
   }
 
+  console.log(`📊 Reranking complete: ${newContext.length} documents retained`);
+  
   // Perbarui state dengan dokumen yang direrank
   return { ...state, context: newContext };
 }
