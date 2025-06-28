@@ -4,7 +4,8 @@
   "description": "Wisnus RAG API with Express TypeScript",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run copy-docs",
+    "copy-docs": "node -e \"const fs=require('fs');const path=require('path');function copyDir(src,dest){if(!fs.existsSync(dest))fs.mkdirSync(dest,{recursive:true});const items=fs.readdirSync(src);items.forEach(item=>{const srcPath=path.join(src,item);const destPath=path.join(dest,item);if(fs.statSync(srcPath).isDirectory()){copyDir(srcPath,destPath);}else{fs.copyFileSync(srcPath,destPath);}});}copyDir('src/docs','dist/docs');console.log('✅ Docs copied to dist/');\"",
     "start": "node dist/main.js",
     "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "test": "jest",

@@ -12,8 +12,35 @@ export interface Document {
 export class MarkdownProcessor {
   constructor() {}
 
-  processMarkdowns(directory: string = './docs'): Document[] {
-    const mdDir = path.resolve(directory);
+  processMarkdowns(directory?: string): Document[] {
+    // Handle Vercel deployment path
+    let mdDir: string;
+    
+    if (directory) {
+      mdDir = path.resolve(directory);
+    } else {
+      // Try different possible paths for Vercel deployment
+      const possiblePaths = [
+        './docs',                    // Local development
+        '/var/task/docs',           // Vercel deployment
+        '/var/task/src/docs',       // Vercel with src structure
+        path.join(process.cwd(), 'docs'),  // Current working directory
+        path.join(process.cwd(), 'src', 'docs')  // Current working directory with src
+      ];
+      
+      for (const possiblePath of possiblePaths) {
+        if (fs.existsSync(possiblePath) && fs.statSync(possiblePath).isDirectory()) {
+          mdDir = possiblePath;
+          console.log(`📁 Found docs directory at: ${mdDir}`);
+          break;
+        }
+      }
+      
+      if (!mdDir) {
+        throw new Error(`Docs directory not found. Tried paths: ${possiblePaths.join(', ')}`);
+      }
+    }
+    
     this.validateDirectory(mdDir);
     return this.loadAndSplitMarkdowns(mdDir);
   }
@@ -28,9 +55,12 @@ export class MarkdownProcessor {
     const allDocs: Document[] = [];
     const files = fs.readdirSync(mdDir);
     
+    console.log(`📂 Processing files in ${mdDir}:`, files);
+    
     for (const file of files) {
       if (file.endsWith('.md')) {
         const mdPath = path.join(mdDir, file);
+        console.log(`📄 Processing markdown file: ${file}`);
         const text = this.readMarkdown(mdPath);
         const paragraphs = this.splitText(text);
         
@@ -48,6 +78,8 @@ export class MarkdownProcessor {
         }
       }
     }
+    
+    console.log(`✅ Processed ${allDocs.length} document chunks from ${mdDir}`);
     return allDocs;
   }
 
