@@ -9,9 +9,42 @@ import { MongoClient } from 'mongodb';
 let ragChain: any = null;
 let ragVectorStore: any = null;
 let llmHolder: LLMHolder | null = null;
+let isInitializing: boolean = false;
+let lastInitializationCheck: number = 0;
+const INITIALIZATION_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 // Internal initialization function that doesn't require response object
-export const initializeRagSystem = async (): Promise<void> => {
+export const initializeRagSystem = async (force: boolean = false): Promise<void> => {
+  // Prevent concurrent initialization
+  if (isInitializing) {
+    console.log('⏳ RAG system is already initializing, waiting...');
+    while (isInitializing) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    return;
+  }
+
+  // Check if initialization is needed (unless forced)
+  if (!force) {
+    const now = Date.now();
+    if (now - lastInitializationCheck < INITIALIZATION_CHECK_INTERVAL) {
+      console.log('ℹ️ Skipping initialization check (recently checked)');
+      return;
+    }
+    
+    const vectorStoreInitializer = new VectorStoreInitializer();
+    const needsInit = await vectorStoreInitializer.isInitializationNeeded();
+    
+    if (!needsInit && ragChain) {
+      console.log('✅ RAG system already initialized and database has documents');
+      lastInitializationCheck = now;
+      return;
+    }
+  }
+
+  isInitializing = true;
+  lastInitializationCheck = Date.now();
+
   try {
     console.log('🚀 Initializing RAG system...');
     
@@ -27,7 +60,7 @@ export const initializeRagSystem = async (): Promise<void> => {
     
     // Initialize vector store
     const vectorStoreInitializer = new VectorStoreInitializer();
-    const ragVectorStore = await vectorStoreInitializer.initializeVectorStore();
+    ragVectorStore = await vectorStoreInitializer.initializeVectorStore();
     
     // Add documents only if they don't exist (avoid duplicate embeddings)
     const result = await vectorStoreInitializer.addDocumentsIfNotExists(docs);
@@ -40,6 +73,8 @@ export const initializeRagSystem = async (): Promise<void> => {
   } catch (error: any) {
     console.error('❌ Initialization failed:', error.message);
     throw error;
+  } finally {
+    isInitializing = false;
   }
 };
 
@@ -51,10 +86,20 @@ export const getHealthStatus = async (_req: Request, res: Response): Promise<voi
   });
 };
 
-export const initializeRag = async (_req: Request, res: Response): Promise<void> => {
+export const initializeRag = async (req: Request, res: Response): Promise<void> => {
   try {
-    await initializeRagSystem();
-    res.json({ message: 'RAG system initialized' });
+    const { force = false } = req.body;
+    
+    if (force) {
+      console.log('🔄 Force initialization requested');
+    }
+    
+    await initializeRagSystem(force);
+    res.json({ 
+      message: 'RAG system initialized',
+      force: force,
+      timestamp: new Date().toISOString()
+    });
   } catch (error: any) {
     res.status(500).json({ error: `Initialization failed: ${error.message}` });
   }
@@ -156,35 +201,20 @@ export const getDatabaseStatus = async (_req: Request, res: Response): Promise<v
   try {
     const vectorStoreInitializer = new VectorStoreInitializer();
     
-    // Get database connection
-    const client = new MongoClient(vectorStoreInitializer['mongodbUri']);
-    await client.connect();
+    // Get detailed database statistics
+    const stats = await vectorStoreInitializer.getDatabaseStats();
     
-    const collection = client.db(vectorStoreInitializer['mongodbDbName'])
-                           .collection(vectorStoreInitializer['mongodbCollectionName']);
-    
-    // Get total documents count
-    const totalCount = await collection.countDocuments({});
-    
-    // Get documents by source
-    const pipeline = [
-      {
-        $group: {
-          _id: '$metadata.source',
-          count: { $sum: 1 }
-        }
-      }
-    ];
-    
-    const sourceStats = await collection.aggregate(pipeline).toArray();
-    
-    await client.close();
+    // Check if initialization is needed
+    const needsInit = await vectorStoreInitializer.isInitializationNeeded();
     
     res.json({
       status: 'success',
-      totalDocuments: totalCount,
-      sourceBreakdown: sourceStats,
+      totalDocuments: stats.totalDocuments,
+      sourceBreakdown: stats.sourceBreakdown,
+      lastUpdated: stats.lastUpdated,
       ragInitialized: !!ragChain,
+      needsInitialization: needsInit,
+      isInitializing: isInitializing,
       timestamp: new Date().toISOString()
     });
     

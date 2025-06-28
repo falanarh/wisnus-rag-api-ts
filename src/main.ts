@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import ragRoutes from './routes/ragRoutes';
 import { initializeRagSystem } from './controllers/ragController';
+import { LangSmithConfig } from './config/langsmith';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -26,12 +27,15 @@ app.get('/', (_req, res) => {
 
 app.use('/api/rag', ragRoutes);
 
+// Initialize LangSmith tracing
+LangSmithConfig.initialize();
+
 // Initialize RAG system automatically on startup
 const startupEvent = async () => {
   try {
-    console.log('🚀 Initializing RAG system...');
-    await initializeRagSystem();
-    console.log('✅ RAG system initialized successfully!');
+    console.log('🚀 Checking if RAG system initialization is needed...');
+    await initializeRagSystem(false); // Use smart initialization
+    console.log('✅ RAG system startup check completed!');
   } catch (error: any) {
     console.log(`❌ Failed to initialize RAG system: ${error.message}`);
     console.log('⚠️ You may need to manually initialize via POST /api/rag/initialize');
