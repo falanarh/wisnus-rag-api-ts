@@ -29,16 +29,22 @@ export class VectorStoreInitializer {
       apiKey: this.geminiApiKey,
     });
 
-    // Connect to MongoDB
-    const client = new MongoClient(this.mongodbUri);
-    const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+    // Connect to MongoDB with proper configuration
+    const client = new MongoClient(this.mongodbUri, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 30000,
+      connectTimeoutMS: 30000,
+    });
     
-    // Set timeout on collection to match @langchain/mongodb expectations
-    (collection as any).timeoutMS = 30000;
+    const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+
+    // Cast collection to handle type mismatch between MongoDB versions
+    const typedCollection = collection as any;
+    typedCollection.timeoutMS = 30000;
 
     // Initialize MongoDB Atlas Vector Store
     const vectorStore = new MongoDBAtlasVectorSearch(embeddings, {
-      collection: collection as any,
+      collection: typedCollection,
       indexName: this.indexName,
     });
 
