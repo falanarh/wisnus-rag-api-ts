@@ -8,7 +8,6 @@ import { QuestionRequest } from '../models/questionRequest';
 let ragChain: any = null;
 let ragVectorStore: any = null;
 let llmHolder: LLMHolder | null = null;
-const isStreaming = false;
 
 // Internal initialization function that doesn't require response object
 export const initializeRagSystem = async (): Promise<void> => {
@@ -32,7 +31,7 @@ export const initializeRagSystem = async (): Promise<void> => {
     }
 
     // Buat RAG chain dengan vector_store dan llm_holder
-    ragChain = createRagChain(ragVectorStore, llmHolder, isStreaming);
+    ragChain = createRagChain(ragVectorStore, llmHolder);
     
     console.log('RAG system initialized successfully');
   } catch (error: any) {
@@ -41,7 +40,7 @@ export const initializeRagSystem = async (): Promise<void> => {
   }
 };
 
-export const healthCheck = async (_req: Request, res: Response) => {
+export const healthCheck = async (_req: Request, res: Response): Promise<void> => {
   try {
     res.json({
       status: 'healthy',
@@ -55,7 +54,7 @@ export const healthCheck = async (_req: Request, res: Response) => {
   }
 };
 
-export const initializeRag = async (_req: Request, res: Response) => {
+export const initializeRag = async (_req: Request, res: Response): Promise<void> => {
   try {
     await initializeRagSystem();
     res.json({ message: 'RAG system initialized' });
@@ -64,41 +63,24 @@ export const initializeRag = async (_req: Request, res: Response) => {
   }
 };
 
-export const askQuestion = async (req: Request, res: Response) => {
+export const askQuestion = async (req: Request, res: Response): Promise<void> => {
   if (!ragChain) {
-    return res.status(400).json({ error: 'RAG not initialized' });
+    res.status(400).json({ error: 'RAG not initialized' });
+    return;
   }
   
   try {
     const { question } = req.body as QuestionRequest;
     
     if (!question || question.trim() === '') {
-      return res.status(400).json({ error: 'Question is required' });
+      res.status(400).json({ error: 'Question is required' });
+      return;
     }
     
-    if (isStreaming) {
-      // Set headers for streaming response
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      
-      // Create streaming response
-      const stream = ragChain.astream({ question }, { streamMode: 'messages' });
-      
-      for await (const chunk of stream) {
-        if (chunk.metadata?.langgraph_node === 'generate') {
-          // Encode to bytes for streaming (similar to Python version)
-          const encodedChunk = Buffer.from(chunk.content, 'utf-8');
-          res.write(encodedChunk);
-        }
-      }
-      
-      res.end();
-    } else {
-      const result = await ragChain.invoke({ question });
-      // Return the complete response structure
-      res.json(result);
-    }
+    const result = await ragChain.invoke({ question });
+    // Return the complete response structure
+    res.json(result);
+    
   } catch (error: any) {
     console.error('Error in askQuestion:', error);
     
@@ -138,7 +120,7 @@ export const askQuestion = async (req: Request, res: Response) => {
 };
 
 // Concurrent test endpoint
-export const concurrentTest = async (req: Request, res: Response) => {
+export const concurrentTest = async (req: Request, res: Response): Promise<void> => {
   try {
     const { numRequests = 5 } = req.body;
     

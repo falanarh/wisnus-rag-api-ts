@@ -66,33 +66,6 @@ export async function safeLlmInvoke(llmHolder: LLMHolder, messages: any): Promis
   }
 }
 
-// Helper function untuk memanggil LLM secara streaming dengan rotasi API key bila terjadi error 429
-export async function* safeLlmInvokeStream(llmHolder: LLMHolder, messages: any): AsyncGenerator<any> {
-  let attempts = 0;
-  const maxAttempts = geminiKeys.length;
-  
-  while (attempts < maxAttempts) {
-    try {
-      const model = llmHolder.llm.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
-      const result = await model.generateContentStream(messages);
-      
-      for await (const chunk of result.stream) {
-        yield chunk;
-      }
-      return;
-    } catch (error: any) {
-      const errorMessage = error.toString();
-      if (errorMessage.includes('429')) {
-        attempts++;
-        llmHolder.llm = await getNextLlm();
-      } else {
-        throw error;
-      }
-    }
-  }
-  throw new Error('All Gemini API keys exhausted due to rate limits.');
-}
-
 export async function multiQueryRetrievalChain(
   state: State,
   vectorStore: MongoDBAtlasVectorSearch,
@@ -310,25 +283,9 @@ export async function generate(state: State, llmHolder: LLMHolder): Promise<Stat
   return { ...state, answer };
 }
 
-export async function* generateStream(state: State, llmHolder: LLMHolder): AsyncGenerator<{ answer: string }> {
-  // Menggabungkan isi dokumen dan menambahkan skor similarity untuk setiap dokumen
-  const docsContent = state.context.map((doc, i) => 
-    `Dokumen ${i + 1}: ${doc.document.pageContent} (Similarity: ${doc.similarityScore.toFixed(4)})`
-  ).join('\n\n');
-  
-  const prompt = ANSWER_TEMPLATE
-    .replace('{context}', docsContent)
-    .replace('{question}', state.question);
-
-  for await (const chunk of safeLlmInvokeStream(llmHolder, prompt)) {
-    yield { answer: chunk.text() };
-  }
-}
-
 export function createRagChain(
   vectorStore: MongoDBAtlasVectorSearch, 
-  llmHolder: LLMHolder, 
-  streaming: boolean = false
+  llmHolder: LLMHolder
 ) {
   return {
     async invoke(input: { question: string }): Promise<{ 
@@ -371,45 +328,6 @@ export function createRagChain(
         context: transformedContext,
         answer: state.answer 
       };
-    },
-    
-    async *astream(input: { question: string }, options: { streamMode: string }): AsyncGenerator<any> {
-      let state: State = { question: input.question, context: [], answer: '' };
-      
-      // Retrieve
-      state = await retrieve(state, vectorStore, llmHolder);
-      
-      // Rerank
-      state = await rerankNode(state, llmHolder);
-      
-      // Generate with streaming
-      if (streaming && options.streamMode === 'messages') {
-        for await (const chunk of generateStream(state, llmHolder)) {
-          yield {
-            content: chunk.answer,
-            metadata: { langgraph_node: 'generate' }
-          };
-        }
-      } else {
-        state = await generate(state, llmHolder);
-        
-        // Transform context to match the required format
-        const transformedContext = state.context.map(doc => ({
-          document: {
-            id: null,
-            metadata: doc.document.metadata || {},
-            page_content: doc.document.pageContent,
-            type: "Document"
-          },
-          similarity_score: doc.similarityScore
-        }));
-        
-        yield { 
-          question: state.question,
-          context: transformedContext,
-          answer: state.answer 
-        };
-      }
     }
   };
 } 

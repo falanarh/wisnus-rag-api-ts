@@ -1,18 +1,16 @@
-# Wisnus RAG API - TypeScript Version
+# 🚀 Wisnus RAG API - TypeScript Version
 
-This is the TypeScript implementation of the Wisnus RAG API, providing 100% functional parity with the Python version.
+A high-performance RAG (Retrieval-Augmented Generation) API built with Express.js and TypeScript, designed for the Wisnus (Wisatawan Nusantara) survey system.
 
-## Features
+## ✨ Features
 
-- **RAG (Retrieval-Augmented Generation)** system with multi-query retrieval
-- **Streaming responses** for real-time answer generation
-- **Advanced reranking** using LLM-based document relevance scoring
+- **RAG-powered Q&A** using Gemini AI and MongoDB Atlas Vector Search
+- **Multi-query retrieval** for improved answer accuracy
+- **Document reranking** based on semantic similarity
 - **API key rotation** for handling rate limits
-- **MongoDB Atlas Vector Search** integration
-- **Google Gemini AI** integration with multiple API keys
-- **Comprehensive evaluation system** with caching
-- **Health check endpoints** for monitoring
-- **CORS support** with configurable origins
+- **Comprehensive error handling** with retry mechanisms
+- **Performance monitoring** and testing tools
+- **Concurrent request handling** with proper resource management
 
 ## Architecture
 
@@ -43,12 +41,10 @@ src/
 
 ## API Endpoints
 
-### Health Check
-- `GET /api/rag/health` - System health status
-
-### RAG Operations
-- `POST /api/rag/initialize` - Initialize the RAG system
-- `POST /api/rag/ask` - Ask a question (supports streaming)
+- `GET /api/rag/health` - Health check
+- `POST /api/rag/initialize` - Initialize RAG system
+- `POST /api/rag/ask` - Ask a question
+- `POST /api/rag/concurrent-test` - Test concurrent requests
 
 ## Environment Variables
 
@@ -99,21 +95,13 @@ npm run dev
 ## Key Features Implementation
 
 ### 1. Multi-Query Retrieval
-The system generates 4 different queries for each question to improve retrieval accuracy:
-- Query 1: `[keyword]?`
-- Query 2: `Apa itu [keyword]?`
-- Query 3: `Jelaskan tentang [keyword]?`
-- Query 4: Simplified original question
+Generates multiple search queries from user questions to improve document retrieval accuracy.
 
-### 2. LLM-Based Reranking
-Documents are reranked using an LLM that evaluates relevance based on:
-- Topic and concept relevance
-- Information suitability
-- Completeness of required information
-- Accuracy and reliability
+### 2. Document Reranking
+LLM-based reranking of retrieved documents based on relevance to the question.
 
-### 3. Streaming Responses
-Real-time streaming of generated answers with proper error handling and API key rotation.
+### 3. Error Handling & Retry
+Comprehensive error handling with automatic API key rotation and retry mechanisms.
 
 ### 4. API Key Rotation
 Automatic rotation of Gemini API keys when rate limits (429 errors) are encountered.
@@ -124,14 +112,12 @@ Comprehensive evaluation with:
 - File hash-based result reuse
 - Detailed performance metrics
 
-## Differences from Python Version
-
-The TypeScript version maintains 100% functional parity with the Python version, with the following implementation differences:
+## Implementation Differences from Python Version
 
 1. **Framework**: Express.js instead of FastAPI
 2. **Language**: TypeScript instead of Python
-3. **Evaluation**: Simplified evaluation metrics (ragas library not available in TypeScript)
-4. **Streaming**: Express.js streaming instead of FastAPI StreamingResponse
+3. **Response Format**: JSON responses instead of streaming
+4. **Memory Management**: Node.js memory management
 
 ## Performance
 

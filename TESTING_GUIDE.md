@@ -244,6 +244,9 @@ curl -X POST http://localhost:3001/api/rag/ask \
 - [ ] Streaming response berfungsi
 - [ ] Error handling berfungsi
 - [ ] API key rotation berfungsi
+- [ ] Response format sesuai dengan schema
+- [ ] Answer field berisi jawaban yang relevan
+- [ ] Context field berisi dokumen yang relevan
 
 ## 🎯 Success Criteria
 

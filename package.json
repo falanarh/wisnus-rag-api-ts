@@ -5,7 +5,6 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "vercel-build": "npm install --legacy-peer-deps && tsc",
     "start": "node dist/main.js",
     "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "test": "jest",
