@@ -5,7 +5,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "vercel-build": "tsc",
+    "vercel-build": "npm install --legacy-peer-deps && tsc",
     "start": "node dist/main.js",
     "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
     "test": "jest",
@@ -31,7 +31,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.2.1",
     "@langchain/community": "^0.3.47",
-    "@langchain/core": "^0.1.0",
+    "@langchain/core": "^0.3.61",
     "@langchain/google-genai": "^0.0.12",
     "@langchain/mongodb": "^0.0.5",
     "@langchain/openai": "^0.0.14",
@@ -89,5 +89,11 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "overrides": {
+    "@langchain/core": "^0.3.61"
+  },
+  "resolutions": {
+    "@langchain/core": "^0.3.61"
   }
 }
