@@ -13,29 +13,22 @@ let llmHolder: LLMHolder | null = null;
 // Internal initialization function that doesn't require response object
 export const initializeRagSystem = async (): Promise<void> => {
   try {
-    console.log('🚀 Initializing RAG system...');
+    console.log('🚀 Initializing RAG system (embedding generation disabled)...');
     
     // Initialize LLM
     const llm = await getCurrentLlm();
     llmHolder = new LLMHolder(llm);
     console.log('✅ LLM initialized');
     
-    // Process markdown documents
-    const processor = new MarkdownProcessor();
-    const docs = processor.processMarkdowns();
-    console.log(`📚 Processed ${docs.length} document chunks`);
-    
-    // Initialize vector store
+    // Initialize vector store (embeddings assumed to exist)
     const vectorStoreInitializer = new VectorStoreInitializer();
     ragVectorStore = await vectorStoreInitializer.initializeVectorStore();
-    
-    // Add documents only if they don't exist (avoid duplicate embeddings)
-    const result = await vectorStoreInitializer.addDocumentsIfNotExists(docs);
-    console.log(`📊 Document addition result: ${result.added} added, ${result.skipped} skipped`);
+    console.log('✅ Vector store initialized (embeddings assumed to exist)');
     
     // Create RAG chain
     ragChain = createRagChain(ragVectorStore, llmHolder);
     console.log('✅ RAG system initialized successfully!');
+    console.log('⚠️ Note: Embedding generation and checking are disabled');
     
   } catch (error: any) {
     console.error('❌ Initialization failed:', error.message);
@@ -54,7 +47,10 @@ export const getHealthStatus = async (_req: Request, res: Response): Promise<voi
 export const initializeRag = async (_req: Request, res: Response): Promise<void> => {
   try {
     await initializeRagSystem();
-    res.json({ message: 'RAG system initialized' });
+    res.json({ 
+      message: 'RAG system initialized',
+      note: 'Embedding generation and checking disabled - assuming embeddings already exist'
+    });
   } catch (error: any) {
     res.status(500).json({ error: `Initialization failed: ${error.message}` });
   }
@@ -313,59 +309,46 @@ export const runConcurrentTest = async (req: Request, res: Response): Promise<vo
 export const getDatabaseStatus = async (_req: Request, res: Response): Promise<void> => {
   try {
     const vectorStoreInitializer = new VectorStoreInitializer();
-    
-    // Get database connection
-    const client = new MongoClient(vectorStoreInitializer['mongodbUri']);
-    await client.connect();
-    
-    const collection = client.db(vectorStoreInitializer['mongodbDbName'])
-                           .collection(vectorStoreInitializer['mongodbCollectionName']);
-    
-    // Get total documents count
-    const totalCount = await collection.countDocuments({});
-    
-    // Get documents by source
-    const pipeline = [
-      {
-        $group: {
-          _id: '$metadata.source',
-          count: { $sum: 1 }
-        }
-      }
-    ];
-    
-    const sourceStats = await collection.aggregate(pipeline).toArray();
-    
-    await client.close();
+    const stats = await vectorStoreInitializer.getDatabaseStats();
     
     res.json({
-      status: 'success',
-      totalDocuments: totalCount,
-      sourceBreakdown: sourceStats,
-      ragInitialized: !!ragChain,
+      success: true,
+      database: {
+        totalDocuments: stats.totalDocuments,
+        sourceBreakdown: stats.sourceBreakdown,
+        lastUpdated: stats.lastUpdated,
+        status: 'operational'
+      },
+      note: 'Embedding generation and checking disabled - assuming all documents have embeddings',
       timestamp: new Date().toISOString()
     });
     
   } catch (error: any) {
     console.error('Error getting database status:', error);
     res.status(500).json({ 
+      success: false,
       error: 'Failed to get database status',
-      details: error.message 
+      details: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 };
 
 export const getPipelineInfo = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { question } = req.query as { question: string };
+    const { question } = req.body;
     
     if (!question || question.trim() === '') {
-      res.status(400).json({ error: 'Question parameter is required' });
+      res.status(400).json({ 
+        success: false,
+        error: 'Question is required',
+        timestamp: new Date().toISOString()
+      });
       return;
     }
     
     // Auto-initialize RAG system if not initialized
-    if (!ragVectorStore) {
+    if (!ragChain || !ragVectorStore) {
       console.log('🔄 RAG system not initialized. Auto-initializing...');
       try {
         await initializeRagSystem();
@@ -373,9 +356,11 @@ export const getPipelineInfo = async (req: Request, res: Response): Promise<void
       } catch (initError: any) {
         console.error('❌ Auto-initialization failed:', initError.message);
         res.status(503).json({ 
+          success: false,
           error: 'RAG system is not ready. Please try again in a few moments.',
           details: 'Auto-initialization failed',
-          retry_after: 30
+          retry_after: 30,
+          timestamp: new Date().toISOString()
         });
         return;
       }
@@ -385,94 +370,54 @@ export const getPipelineInfo = async (req: Request, res: Response): Promise<void
     
     res.json({
       success: true,
-      question,
-      pipelineInfo,
+      question: question,
+      pipelineInfo: {
+        ...pipelineInfo,
+        note: 'Embedding generation and checking disabled - assuming embeddings already exist'
+      },
       timestamp: new Date().toISOString()
     });
     
   } catch (error: any) {
     console.error('Error getting pipeline info:', error);
     res.status(500).json({ 
-      error: 'Failed to get pipeline information',
-      details: error.message 
+      success: false,
+      error: 'Failed to get pipeline info',
+      details: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 };
 
-// Generate embeddings for existing documents without embeddings
+// DISABLED: Generate embeddings for existing documents
 export const generateEmbeddingsForExisting = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { batchSize = 10 } = req.body;
-    
-    console.log('🔄 Starting embedding generation for existing documents...');
-    
-    const vectorStoreInitializer = new VectorStoreInitializer();
-    const result = await vectorStoreInitializer.generateEmbeddingsForExistingDocuments(batchSize);
-    
-    res.json({
-      success: true,
-      data: result,
-      message: `Embedding generation completed: ${result.processed} processed, ${result.failed} failed`
-    });
-  } catch (error: any) {
-    console.error('Error generating embeddings for existing documents:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      message: 'Failed to generate embeddings for existing documents'
-    });
-  }
+  res.status(503).json({
+    success: false,
+    error: 'Embedding generation is disabled',
+    message: 'This endpoint is disabled. Embeddings are assumed to already exist in the database.',
+    note: 'To re-enable embedding generation, modify the VectorStoreInitializer class',
+    timestamp: new Date().toISOString()
+  });
 };
 
-// Check and fix embeddings for all documents
+// DISABLED: Check and fix embeddings
 export const checkAndFixEmbeddings = async (req: Request, res: Response): Promise<void> => {
-  try {
-    console.log('🔍 Checking and fixing embeddings for all documents...');
-    
-    const vectorStoreInitializer = new VectorStoreInitializer();
-    const result = await vectorStoreInitializer.checkAndFixEmbeddings();
-    
-    res.json({
-      success: true,
-      data: result,
-      message: `Embedding check completed: ${result.totalDocuments} total, ${result.withoutEmbeddings} without embeddings, ${result.processed} processed, ${result.failed} failed`
-    });
-  } catch (error: any) {
-    console.error('Error checking and fixing embeddings:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      message: 'Failed to check and fix embeddings'
-    });
-  }
+  res.status(503).json({
+    success: false,
+    error: 'Embedding checking and fixing is disabled',
+    message: 'This endpoint is disabled. Embeddings are assumed to already exist and be valid.',
+    note: 'To re-enable embedding checking, modify the VectorStoreInitializer class',
+    timestamp: new Date().toISOString()
+  });
 };
 
-// Get documents without embeddings
+// DISABLED: Get documents without embeddings
 export const getDocumentsWithoutEmbeddings = async (req: Request, res: Response): Promise<void> => {
-  try {
-    console.log('📋 Finding documents without embeddings...');
-    
-    const vectorStoreInitializer = new VectorStoreInitializer();
-    const documents = await vectorStoreInitializer.findDocumentsWithoutEmbeddings();
-    
-    res.json({
-      success: true,
-      data: {
-        count: documents.length,
-        documents: documents.map(doc => ({
-          chunkId: doc.metadata.chunkId,
-          source: doc.metadata.source,
-          pageContent: doc.pageContent.substring(0, 100) + '...' // Truncate for preview
-        }))
-      },
-      message: `Found ${documents.length} documents without embeddings`
-    });
-  } catch (error: any) {
-    console.error('Error finding documents without embeddings:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      message: 'Failed to find documents without embeddings'
-    });
-  }
-} 
+  res.status(503).json({
+    success: false,
+    error: 'Embedding checking is disabled',
+    message: 'This endpoint is disabled. All documents are assumed to have embeddings.',
+    note: 'To re-enable embedding checking, modify the VectorStoreInitializer class',
+    timestamp: new Date().toISOString()
+  });
+}; 

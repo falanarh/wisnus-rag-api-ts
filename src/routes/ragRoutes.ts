@@ -20,7 +20,7 @@ router.get('/health', getHealthStatus);
 router.get('/status', getDatabaseStatus);
 
 // Pipeline info endpoint
-router.get('/pipeline-info', getPipelineInfo);
+router.post('/pipeline-info', getPipelineInfo);
 
 // Initialize RAG system
 router.post('/initialize', async (req, res) => {
@@ -28,6 +28,7 @@ router.post('/initialize', async (req, res) => {
     await initializeRagSystem();
     res.json({ 
       message: 'RAG system initialized successfully',
+      note: 'Embedding generation and checking disabled - assuming embeddings already exist',
       timestamp: new Date().toISOString()
     });
   } catch (error: any) {
@@ -44,7 +45,9 @@ router.post('/ask', askQuestion);
 // Concurrent test endpoint
 router.post('/concurrent-test', runConcurrentTest);
 
-// Embedding management endpoints
+// DISABLED: Embedding management endpoints
+// These endpoints are disabled to speed up the RAG pipeline
+// Embeddings are assumed to already exist in the database
 router.get('/documents-without-embeddings', getDocumentsWithoutEmbeddings);
 router.post('/generate-embeddings', generateEmbeddingsForExisting);
 router.post('/check-and-fix-embeddings', checkAndFixEmbeddings);
