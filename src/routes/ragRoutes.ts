@@ -5,7 +5,10 @@ import {
   getHealthStatus, 
   runConcurrentTest,
   getDatabaseStatus,
-  getPipelineInfo
+  getPipelineInfo,
+  generateEmbeddingsForExisting,
+  checkAndFixEmbeddings,
+  getDocumentsWithoutEmbeddings
 } from '../controllers/ragController';
 
 const router = express.Router();
@@ -40,5 +43,10 @@ router.post('/ask', askQuestion);
 
 // Concurrent test endpoint
 router.post('/concurrent-test', runConcurrentTest);
+
+// Embedding management endpoints
+router.get('/documents-without-embeddings', getDocumentsWithoutEmbeddings);
+router.post('/generate-embeddings', generateEmbeddingsForExisting);
+router.post('/check-and-fix-embeddings', checkAndFixEmbeddings);
 
 export default router; 

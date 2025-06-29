@@ -239,4 +239,82 @@ export const getPipelineInfo = async (req: Request, res: Response): Promise<void
       details: error.message 
     });
   }
-}; 
+};
+
+// Generate embeddings for existing documents without embeddings
+export const generateEmbeddingsForExisting = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { batchSize = 10 } = req.body;
+    
+    console.log('🔄 Starting embedding generation for existing documents...');
+    
+    const vectorStoreInitializer = new VectorStoreInitializer();
+    const result = await vectorStoreInitializer.generateEmbeddingsForExistingDocuments(batchSize);
+    
+    res.json({
+      success: true,
+      data: result,
+      message: `Embedding generation completed: ${result.processed} processed, ${result.failed} failed`
+    });
+  } catch (error: any) {
+    console.error('Error generating embeddings for existing documents:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to generate embeddings for existing documents'
+    });
+  }
+};
+
+// Check and fix embeddings for all documents
+export const checkAndFixEmbeddings = async (req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('🔍 Checking and fixing embeddings for all documents...');
+    
+    const vectorStoreInitializer = new VectorStoreInitializer();
+    const result = await vectorStoreInitializer.checkAndFixEmbeddings();
+    
+    res.json({
+      success: true,
+      data: result,
+      message: `Embedding check completed: ${result.totalDocuments} total, ${result.withoutEmbeddings} without embeddings, ${result.processed} processed, ${result.failed} failed`
+    });
+  } catch (error: any) {
+    console.error('Error checking and fixing embeddings:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to check and fix embeddings'
+    });
+  }
+};
+
+// Get documents without embeddings
+export const getDocumentsWithoutEmbeddings = async (req: Request, res: Response): Promise<void> => {
+  try {
+    console.log('📋 Finding documents without embeddings...');
+    
+    const vectorStoreInitializer = new VectorStoreInitializer();
+    const documents = await vectorStoreInitializer.findDocumentsWithoutEmbeddings();
+    
+    res.json({
+      success: true,
+      data: {
+        count: documents.length,
+        documents: documents.map(doc => ({
+          chunkId: doc.metadata.chunkId,
+          source: doc.metadata.source,
+          pageContent: doc.pageContent.substring(0, 100) + '...' // Truncate for preview
+        }))
+      },
+      message: `Found ${documents.length} documents without embeddings`
+    });
+  } catch (error: any) {
+    console.error('Error finding documents without embeddings:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Failed to find documents without embeddings'
+    });
+  }
+} 

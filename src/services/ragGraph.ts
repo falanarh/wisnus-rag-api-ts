@@ -1,7 +1,7 @@
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { MongoDBAtlasVectorSearch } from '@langchain/mongodb';
 import { Document } from './mdProcessor';
-import { getCurrentLlm, getNextLlm, invokeWithRetry } from '../config/llm';
+import { getCurrentLlm, invokeWithRetry } from '../config/llm';
 import { traceable } from 'langsmith/traceable';
 import { RunTree } from 'langsmith';
 

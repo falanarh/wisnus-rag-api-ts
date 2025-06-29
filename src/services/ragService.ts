@@ -1,7 +1,7 @@
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { Document } from './mdProcessor';
 import { MongoDBAtlasVectorSearch } from '@langchain/mongodb';
-import { geminiKeys, getCurrentLlm, getNextLlm, invokeWithRetry } from '../config/llm';
+import { getCurrentLlm, invokeWithRetry } from '../config/llm';
 import { createRAGGraph, RAGState, RetrievedDocument } from './ragGraph';
 
 // Kelas pembungkus untuk menyimpan instance LLM agar bisa diperbarui saat rotasi

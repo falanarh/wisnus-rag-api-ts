@@ -3,6 +3,7 @@ import { GoogleGenerativeAIEmbeddings } from '@langchain/google-genai';
 import { MongoDBAtlasVectorSearch } from '@langchain/mongodb';
 import { Document } from './mdProcessor';
 import { createHash } from 'crypto';
+import { Settings } from '../configuration';
 
 export class VectorStoreInitializer {
   private geminiApiKey: string;
@@ -12,11 +13,23 @@ export class VectorStoreInitializer {
   private indexName: string;
 
   constructor() {
-    this.geminiApiKey = process.env.GEMINI_API_KEY_1 || '';
-    this.mongodbUri = process.env.MONGODB_URI || '';
-    this.mongodbDbName = process.env.MONGODB_DB_NAME || '';
-    this.mongodbCollectionName = process.env.MONGODB_COLLECTION_NAME || '';
+    // Get first available Gemini API key
+    const apiKeys = Settings.getGeminiApiKeys();
+    if (apiKeys.length === 0) {
+      throw new Error('No Gemini API keys found. Please set GEMINI_API_KEY_1 in your environment variables.');
+    }
+    this.geminiApiKey = apiKeys[0];
+    
+    this.mongodbUri = Settings.MONGO_URI;
+    this.mongodbDbName = Settings.MONGO_DB_NAME;
+    this.mongodbCollectionName = Settings.MONGO_COLLECTION_NAME;
     this.indexName = 'vector_index';
+    
+    console.log(`🔧 VectorStore Initializer configured:`);
+    console.log(`   MongoDB URI: ${this.mongodbUri}`);
+    console.log(`   Database: ${this.mongodbDbName}`);
+    console.log(`   Collection: ${this.mongodbCollectionName}`);
+    console.log(`   API Key: ${this.geminiApiKey.substring(0, 8)}...`);
   }
 
   // Generate content hash for deduplication
@@ -246,5 +259,207 @@ export class VectorStoreInitializer {
       console.error('❌ Error getting database stats:', error);
       throw error;
     }
+  }
+
+  // Method to find documents without embeddings
+  async findDocumentsWithoutEmbeddings(): Promise<Document[]> {
+    try {
+      const client = new MongoClient(this.mongodbUri);
+      await client.connect();
+      
+      const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+      
+      // Find documents that don't have embeddings
+      const documentsWithoutEmbeddings = await collection.find({
+        $or: [
+          { embedding: { $exists: false } },
+          { embedding: null },
+          { embedding: { $size: 0 } }
+        ]
+      }).toArray();
+      
+      await client.close();
+      
+      console.log(`📋 Found ${documentsWithoutEmbeddings.length} documents without embeddings`);
+      
+      return documentsWithoutEmbeddings.map(doc => ({
+        pageContent: doc.pageContent,
+        metadata: doc.metadata,
+        _id: doc._id
+      }));
+      
+    } catch (error) {
+      console.error('❌ Error finding documents without embeddings:', error);
+      throw error;
+    }
+  }
+
+  // Method to generate embeddings for existing documents
+  async generateEmbeddingsForExistingDocuments(batchSize: number = 10): Promise<{ processed: number, failed: number }> {
+    try {
+      const documentsWithoutEmbeddings = await this.findDocumentsWithoutEmbeddings();
+      
+      if (documentsWithoutEmbeddings.length === 0) {
+        console.log('✅ All documents already have embeddings');
+        return { processed: 0, failed: 0 };
+      }
+      
+      console.log(`🔄 Generating embeddings for ${documentsWithoutEmbeddings.length} existing documents...`);
+      
+      // Initialize embeddings
+      const embeddings = new GoogleGenerativeAIEmbeddings({
+        modelName: 'models/embedding-001',
+        apiKey: this.geminiApiKey,
+      });
+      
+      const client = new MongoClient(this.mongodbUri);
+      await client.connect();
+      
+      const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+      
+      let processed = 0;
+      let failed = 0;
+      
+      // Process in batches
+      for (let i = 0; i < documentsWithoutEmbeddings.length; i += batchSize) {
+        const batch = documentsWithoutEmbeddings.slice(i, i + batchSize);
+        console.log(`📦 Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(documentsWithoutEmbeddings.length / batchSize)}`);
+        
+        const batchPromises = batch.map(async (doc) => {
+          try {
+            // Generate embedding
+            const embedding = await embeddings.embedQuery(doc.pageContent);
+            
+            // Update document with embedding
+            await collection.updateOne(
+              { _id: doc._id },
+              { 
+                $set: { 
+                  embedding: embedding,
+                  embeddingGeneratedAt: new Date()
+                }
+              }
+            );
+            
+            console.log(`✅ Generated embedding for: ${doc.metadata?.chunkId || 'unknown'}`);
+            return { success: true };
+          } catch (error) {
+            console.error(`❌ Failed to generate embedding for ${doc.metadata?.chunkId || 'unknown'}:`, error);
+            return { success: false, error };
+          }
+        });
+        
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        batchResults.forEach(result => {
+          if (result.status === 'fulfilled' && result.value.success) {
+            processed++;
+          } else {
+            failed++;
+          }
+        });
+        
+        // Small delay between batches to avoid rate limiting
+        if (i + batchSize < documentsWithoutEmbeddings.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
+      await client.close();
+      
+      console.log(`✅ Embedding generation completed: ${processed} processed, ${failed} failed`);
+      return { processed, failed };
+      
+    } catch (error) {
+      console.error('❌ Error generating embeddings for existing documents:', error);
+      throw error;
+    }
+  }
+
+  // Method to check and fix documents without embeddings
+  async checkAndFixEmbeddings(): Promise<{ totalDocuments: number, withoutEmbeddings: number, processed: number, failed: number }> {
+    try {
+      const client = new MongoClient(this.mongodbUri);
+      await client.connect();
+      
+      const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+      
+      // Get total document count
+      const totalDocuments = await collection.countDocuments({});
+      
+      // Get count of documents without embeddings
+      const withoutEmbeddings = await collection.countDocuments({
+        $or: [
+          { embedding: { $exists: false } },
+          { embedding: null },
+          { embedding: { $size: 0 } }
+        ]
+      });
+      
+      await client.close();
+      
+      console.log(`📊 Database status: ${totalDocuments} total documents, ${withoutEmbeddings} without embeddings`);
+      
+      if (withoutEmbeddings > 0) {
+        console.log('🔄 Starting embedding generation for existing documents...');
+        const { processed, failed } = await this.generateEmbeddingsForExistingDocuments();
+        return { totalDocuments, withoutEmbeddings, processed, failed };
+      } else {
+        return { totalDocuments, withoutEmbeddings: 0, processed: 0, failed: 0 };
+      }
+      
+    } catch (error) {
+      console.error('❌ Error checking and fixing embeddings:', error);
+      throw error;
+    }
+  }
+
+  // Enhanced method to add documents with better handling of existing documents
+  async addDocumentsWithEmbeddingCheck(documents: Document[]): Promise<{ added: number, skipped: number, updated: number }> {
+    const { existing, newDocs } = await this.checkExistingDocuments(documents);
+    
+    let added = 0;
+    let skipped = existing.length;
+    let updated = 0;
+    
+    // Add new documents
+    if (newDocs.length > 0) {
+      const addResult = await this.addDocumentsIfNotExists(newDocs);
+      added = addResult.added;
+    }
+    
+    // Check if existing documents need embeddings
+    if (existing.length > 0) {
+      console.log(`🔍 Checking ${existing.length} existing documents for missing embeddings...`);
+      
+      const client = new MongoClient(this.mongodbUri);
+      await client.connect();
+      
+      const collection = client.db(this.mongodbDbName).collection(this.mongodbCollectionName);
+      
+      const documentsNeedingEmbeddings = [];
+      
+      for (const doc of existing) {
+        const contentHash = this.generateContentHash(doc.pageContent, doc.metadata);
+        const existingDoc = await collection.findOne({ 'contentHash': contentHash });
+        
+        if (existingDoc && (!existingDoc.embedding || existingDoc.embedding.length === 0)) {
+          documentsNeedingEmbeddings.push({
+            ...doc,
+            _id: existingDoc._id
+          });
+        }
+      }
+      
+      await client.close();
+      
+      if (documentsNeedingEmbeddings.length > 0) {
+        console.log(`🔄 Found ${documentsNeedingEmbeddings.length} existing documents without embeddings`);
+        const { processed } = await this.generateEmbeddingsForExistingDocuments();
+        updated = processed;
+      }
+    }
+    
+    return { added, skipped, updated };
   }
 } 

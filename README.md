@@ -9,11 +9,41 @@ A high-performance RAG (Retrieval-Augmented Generation) API built with Express.j
 - **LangSmith integration** for detailed tracing and monitoring
 - **Multi-query retrieval** for improved answer accuracy
 - **Document reranking** based on semantic similarity
-- **API key rotation** for handling rate limits
+- **Advanced API Key Management** with database storage and smart selection
 - **Comprehensive error handling** with retry mechanisms
 - **Performance monitoring** and testing tools
 - **Concurrent request handling** with proper resource management
 - **Pipeline observability** with step-by-step tracking
+
+## 🎯 API Key Management System
+
+The system includes a sophisticated API key management system with the following features:
+
+### Smart API Key Selection
+- **Intelligent Selection**: Automatically selects the API key with the furthest distance from limits (RPM, RPD, TPM)
+- **Scoring Algorithm**: Uses weighted scoring (RPM 50%, RPD 30%, TPM 20%) for optimal key selection
+- **Automatic Fallback**: Seamlessly switches to the best available key when rate limits are hit
+
+### Rate Limit Tracking
+- **RPM (Requests per Minute)**: 30 requests limit for Gemini 2.0 Flash-Lite
+- **RPD (Requests per Day)**: 200 requests limit
+- **TPM (Tokens per Minute)**: 1,000,000 tokens limit
+- **Automatic Reset**: Limits reset automatically (1 minute for RPM/TPM, 24 hours for RPD)
+
+### Database Storage
+- **Persistent State**: All API key status stored in MongoDB
+- **Usage History**: Complete tracking of API usage and errors
+- **Cross-Restart Persistence**: State maintained across application restarts
+
+### API Endpoints
+- `GET /api/keys/status` - Get status of all API keys
+- `GET /api/keys/best` - Get best available API key info
+- `GET /api/keys/usage-stats` - Get usage statistics
+- `POST /api/keys/reactivate/:apiKey` - Reactivate deactivated key
+- `POST /api/keys/reset-limits` - Reset all API key limits
+- `GET /api/keys/rate-limit/:apiKey` - Get rate limit info for specific key
+
+For detailed documentation, see [API Key Management Guide](API_KEY_MANAGEMENT.md).
 
 ## Architecture
 
@@ -22,20 +52,23 @@ The TypeScript version maintains the same architecture as the Python version wit
 ```
 src/
 ├── config/
-│   ├── llm.ts                    # LLM configuration and API key rotation
+│   ├── llm.ts                    # LLM configuration and API key management
 │   ├── langsmith.ts              # LangSmith tracing configuration
 │   └── rotatingLlmWrapper.ts     # Rotating LLM wrapper for evaluation
 ├── controllers/
-│   └── ragController.ts          # Request handlers
+│   ├── ragController.ts          # Request handlers
+│   └── apiKeyController.ts       # API key management controllers
 ├── models/
 │   └── questionRequest.ts        # Request/response models
 ├── routes/
-│   └── ragRoutes.ts              # API route definitions
+│   ├── ragRoutes.ts              # API route definitions
+│   └── apiKeyRoutes.ts           # API key management routes
 ├── services/
 │   ├── mdProcessor.ts            # Markdown document processing
 │   ├── ragService.ts             # Core RAG functionality (LangGraph-based)
 │   ├── ragGraph.ts               # LangGraph pipeline implementation with LangSmith
-│   └── vectorStore.ts            # Vector store initialization
+│   ├── vectorStore.ts            # Vector store initialization
+│   └── apiKeyManager.ts          # API key management service
 ├── types/
 │   └── mainTypes.ts              # TypeScript type definitions
 ├── utils/
@@ -86,6 +119,14 @@ LangSmith integration provides detailed tracing and monitoring:
 - `POST /api/rag/initialize` - Initialize RAG system
 - `POST /api/rag/ask` - Ask a question
 - `POST /api/rag/concurrent-test` - Test concurrent requests
+
+### API Key Management Endpoints
+- `GET /api/keys/status` - Get status of all API keys
+- `GET /api/keys/best` - Get best available API key info
+- `GET /api/keys/usage-stats` - Get usage statistics
+- `POST /api/keys/reactivate/:apiKey` - Reactivate deactivated key
+- `POST /api/keys/reset-limits` - Reset all API key limits
+- `GET /api/keys/rate-limit/:apiKey` - Get rate limit info for specific key
 
 ### New Pipeline Info Endpoint
 
@@ -193,6 +234,22 @@ This will test:
 - Step-by-step processing
 - Concurrent request handling
 - Error scenarios
+
+## Testing API Key Management
+
+Run the API key management test suite:
+
+```bash
+npm run test:api-keys
+```
+
+This will test:
+- API key status retrieval
+- Best key selection
+- Usage statistics
+- Rate limit handling
+- Key reactivation
+- Concurrent request handling with API key management
 
 ## Key Features Implementation
 
@@ -361,3 +418,164 @@ If LangSmith tracing fails:
 ## License
 
 MIT License 
+
+## Embedding Management
+
+### Overview
+
+The system now includes comprehensive embedding management for documents that already exist in the database. This feature allows you to:
+
+- **Detect documents without embeddings**: Find all documents in the database that don't have vector embeddings
+- **Generate embeddings for existing documents**: Create embeddings for documents that were added without embeddings
+- **Batch processing**: Process documents in configurable batches to avoid rate limits
+- **Automatic verification**: Check and fix all documents to ensure they have embeddings
+
+### API Endpoints
+
+#### Get Documents Without Embeddings
+```bash
+GET /api/rag/documents-without-embeddings
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "count": 5,
+    "documents": [
+      {
+        "chunkId": "sample_1_chunk_1",
+        "source": "sample_document_1.md",
+        "pageContent": "Survei Wisatawan Nusantara adalah program survei..."
+      }
+    ]
+  },
+  "message": "Found 5 documents without embeddings"
+}
+```
+
+#### Generate Embeddings for Existing Documents
+```bash
+POST /api/rag/generate-embeddings
+Content-Type: application/json
+
+{
+  "batchSize": 10
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "processed": 8,
+    "failed": 2
+  },
+  "message": "Embedding generation completed: 8 processed, 2 failed"
+}
+```
+
+#### Check and Fix All Embeddings
+```bash
+POST /api/rag/check-and-fix-embeddings
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "totalDocuments": 25,
+    "withoutEmbeddings": 5,
+    "processed": 5,
+    "failed": 0
+  },
+  "message": "Embedding check completed: 25 total, 5 without embeddings, 5 processed, 0 failed"
+}
+```
+
+### Usage Examples
+
+#### Manual Embedding Generation
+```javascript
+// Find documents without embeddings
+const response = await fetch('/api/rag/documents-without-embeddings');
+const data = await response.json();
+console.log(`Found ${data.data.count} documents without embeddings`);
+
+// Generate embeddings in batches
+const generateResponse = await fetch('/api/rag/generate-embeddings', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ batchSize: 10 })
+});
+const result = await generateResponse.json();
+console.log(`Processed: ${result.data.processed}, Failed: ${result.data.failed}`);
+```
+
+#### Automated Embedding Check
+```javascript
+// Comprehensive check and fix
+const checkResponse = await fetch('/api/rag/check-and-fix-embeddings', {
+  method: 'POST'
+});
+const checkResult = await checkResponse.json();
+console.log(`Total: ${checkResult.data.totalDocuments}, Fixed: ${checkResult.data.processed}`);
+```
+
+### Testing
+
+Run the embedding management test:
+
+```bash
+node test-embedding-management.js
+```
+
+This test will:
+1. Check database status
+2. Find documents without embeddings
+3. Generate embeddings for existing documents
+4. Run comprehensive check and fix
+5. Verify all documents have embeddings
+6. Test RAG functionality
+
+### Features
+
+#### Batch Processing
+- Configurable batch size (default: 10)
+- Rate limiting protection with delays between batches
+- Error handling for individual document failures
+
+#### Content Hash Deduplication
+- Uses SHA-256 hash of content + metadata for deduplication
+- Prevents duplicate embeddings for identical content
+- Efficient database queries
+
+#### Progress Tracking
+- Real-time progress logging
+- Detailed success/failure reporting
+- Batch-by-batch status updates
+
+#### Error Recovery
+- Continues processing even if individual documents fail
+- Detailed error logging for failed documents
+- Retry mechanism for transient failures
+
+### Integration with Existing System
+
+The embedding management system integrates seamlessly with the existing RAG system:
+
+1. **Automatic Detection**: Detects documents without embeddings during initialization
+2. **Lazy Loading**: Only generates embeddings when needed
+3. **Performance Optimization**: Batch processing reduces API calls
+4. **Fallback Support**: Works with both MongoDB and in-memory storage
+
+### Best Practices
+
+1. **Batch Size**: Use batch size of 5-10 for optimal performance
+2. **Rate Limiting**: Respect API rate limits with appropriate delays
+3. **Monitoring**: Monitor embedding generation progress
+4. **Verification**: Always verify all documents have embeddings after processing
+5. **Backup**: Backup database before large-scale embedding operations
