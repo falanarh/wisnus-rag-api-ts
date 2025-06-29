@@ -35,8 +35,8 @@ const generateQueries = traceable(async (state: RAGState): Promise<Partial<RAGSt
       (Contoh: "Apa itu eko wisata?")
   - Query 3: Format "Jelaskan tentang [kata kunci]?" 
       (Contoh: "Jelaskan tentang eko wisata?")
-  - Query 4: Format "Definisi dari [kata kunci]" (TANPA TANDA TANYA)
-      (Contoh: "Definisi dari eko wisata")
+  - Query 4: Pertanyaan asli tanpa perubahan apapun
+      (Contoh: Jika pertanyaan asli "Apa definisi dari eko wisata dalam survei ini?" maka Query 4 = "Apa definisi dari eko wisata dalam survei ini?")
 3. Pastikan Anda membuat tepat EMPAT kueri.`;
   const userPrompt = `Buatkan empat query untuk pertanyaan berikut: "${state.question}".`;
   const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
@@ -60,7 +60,7 @@ const generateQueries = traceable(async (state: RAGState): Promise<Partial<RAGSt
 
   if (queries.length < 4) {
     const mainKeyword = state.question.split(' ').slice(0, 3).join(' ');
-    const fallbackQueries = [`${mainKeyword}?`, `Apa itu ${mainKeyword}?`, `Jelaskan tentang ${mainKeyword}?`, `Definisi dari ${mainKeyword}`];
+    const fallbackQueries = [`${mainKeyword}?`, `Apa itu ${mainKeyword}?`, `Jelaskan tentang ${mainKeyword}?`, state.question];
     for (let i = queries.length; i < 4; i++) {
       queries.push(fallbackQueries[i]);
     }
