@@ -132,22 +132,180 @@ export const runConcurrentTest = async (req: Request, res: Response): Promise<vo
   try {
     const { numRequests = 5 } = req.body;
     
-    // Import and run the test function
-    const { runConcurrentTest } = require('../../test-concurrent.js');
-    const result = await runConcurrentTest(numRequests);
+    console.log(`🧪 Starting concurrent test with ${numRequests} requests...`);
+    
+    // Validate input
+    if (numRequests < 1 || numRequests > 50) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid number of requests. Must be between 1 and 50.',
+        message: 'Please provide a valid number of requests'
+      });
+      return;
+    }
+    
+    // Define types for request results
+    interface RequestResult {
+      requestId: number;
+      status: 'success' | 'error' | 'promise_rejected';
+      executionTime: number;
+      question?: string;
+      answerLength?: number;
+      contextCount?: number;
+      error?: string;
+    }
+    
+    // Sample questions for testing
+    const testQuestions = [
+      'apa yang dimaksud dengan ekowisata?',
+      'jelaskan tentang wisata bahari',
+      'apa itu wisata petualangan?',
+      'bagaimana cara melakukan survei wisatawan?',
+      'apa saja jenis kegiatan wisata?',
+      'jelaskan tentang wisata sejarah dan religi',
+      'apa yang dimaksud dengan wisata kuliner?',
+      'bagaimana karakteristik wisata kota dan pedesaan?',
+      'apa itu wisata MICE?',
+      'jelaskan tentang wisata olahraga dan kesehatan'
+    ];
+    
+    // Helper function to get random question
+    const getRandomQuestion = (): string => {
+      return testQuestions[Math.floor(Math.random() * testQuestions.length)];
+    };
+    
+    // Helper function to measure execution time
+    const measureExecutionTime = async (fn: () => Promise<any>) => {
+      const start = Date.now();
+      const result = await fn();
+      const end = Date.now();
+      return { result, executionTime: end - start };
+    };
+    
+    // Single request function
+    const makeSingleRequest = async (question: string, requestId: number): Promise<RequestResult> => {
+      try {
+        console.log(`🚀 Request ${requestId}: Starting request for "${question.substring(0, 30)}..."`);
+        
+        // Auto-initialize RAG system if not initialized
+        if (!ragChain) {
+          console.log('🔄 RAG system not initialized. Auto-initializing...');
+          await initializeRagSystem();
+          console.log('✅ RAG system auto-initialized successfully!');
+        }
+        
+        const response = await measureExecutionTime(async () => {
+          const result = await ragChain.invoke({
+            question: question
+          });
+          return result;
+        });
+        
+        console.log(`✅ Request ${requestId}: Success (${response.executionTime}ms)`);
+        
+        return {
+          requestId,
+          status: 'success',
+          executionTime: response.executionTime,
+          question: question,
+          answerLength: response.result.answer?.length || 0,
+          contextCount: response.result.context?.length || 0
+        };
+        
+      } catch (error: any) {
+        console.log(`❌ Request ${requestId}: Failed`);
+        console.log(`   Error: ${error.message}`);
+        
+        return {
+          requestId,
+          status: 'error',
+          error: error.message,
+          executionTime: 0
+        };
+      }
+    };
+    
+    // Create array of promises for concurrent execution
+    const requests: Promise<RequestResult>[] = [];
+    for (let i = 1; i <= numRequests; i++) {
+      const question = getRandomQuestion();
+      requests.push(makeSingleRequest(question, i));
+    }
+    
+    // Execute all requests concurrently
+    const startTime = Date.now();
+    const results = await Promise.allSettled(requests);
+    const endTime = Date.now();
+    const totalTime = endTime - startTime;
+    
+    // Process results
+    const successfulRequests: RequestResult[] = [];
+    const failedRequests: RequestResult[] = [];
+    
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        if (result.value.status === 'success') {
+          successfulRequests.push(result.value);
+        } else {
+          failedRequests.push(result.value);
+        }
+      } else {
+        failedRequests.push({
+          requestId: index + 1,
+          status: 'promise_rejected',
+          error: result.reason?.message || 'Unknown error',
+          executionTime: 0
+        });
+      }
+    });
+    
+    // Calculate statistics
+    const successRate = (successfulRequests.length / numRequests) * 100;
+    const avgExecutionTime = successfulRequests.length > 0 
+      ? successfulRequests.reduce((sum, req) => sum + req.executionTime, 0) / successfulRequests.length 
+      : 0;
+    
+    const result = {
+      totalRequests: numRequests,
+      successful: successfulRequests.length,
+      failed: failedRequests.length,
+      successRate,
+      totalTime,
+      avgExecutionTime,
+      minTime: successfulRequests.length > 0 ? Math.min(...successfulRequests.map(r => r.executionTime)) : 0,
+      maxTime: successfulRequests.length > 0 ? Math.max(...successfulRequests.map(r => r.executionTime)) : 0,
+      throughput: numRequests / (totalTime / 1000),
+      details: {
+        successful: successfulRequests,
+        failed: failedRequests
+      }
+    };
+    
+    console.log('\n📊 CONCURRENT TEST RESULTS');
+    console.log('=' .repeat(50));
+    console.log(`Total Requests: ${result.totalRequests}`);
+    console.log(`Successful: ${result.successful}`);
+    console.log(`Failed: ${result.failed}`);
+    console.log(`Success Rate: ${result.successRate.toFixed(1)}%`);
+    console.log(`Total Time: ${result.totalTime}ms`);
+    console.log(`Average Execution Time: ${result.avgExecutionTime.toFixed(0)}ms`);
+    console.log(`Throughput: ${result.throughput.toFixed(2)} requests/second`);
     
     res.json({
       success: true,
       testType: 'concurrent',
       numRequests,
-      result
+      result,
+      timestamp: new Date().toISOString()
     });
     
   } catch (error: any) {
     console.error('Error in concurrent test:', error);
     res.status(500).json({ 
+      success: false,
       error: 'Failed to run concurrent test',
-      details: error.message 
+      details: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 };
