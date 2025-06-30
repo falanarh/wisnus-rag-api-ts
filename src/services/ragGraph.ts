@@ -71,27 +71,37 @@ const generateQueries = traceable(async (state: RAGState): Promise<Partial<RAGSt
 }, { name: 'generate_queries' });
 
 const retrieveDocuments = traceable(async (state: RAGState, vectorStore: MongoDBAtlasVectorSearch): Promise<Partial<RAGState>> => {
-  console.log('📚 Retrieving documents...');
+  console.log('📚 Retrieving documents with MMR per query...');
   if (!state.queries || state.queries.length === 0) {
     throw new Error('No queries available for retrieval');
   }
-  
+
+  const k = 3;
+  const fetch_k = 20;
+  const lambda = 0.5;
   const allResults: RetrievedDocument[] = [];
+
   for (const query of state.queries) {
-      console.log(`🔎 Searching for: "${query}"`);
-      const results = await vectorStore.similaritySearch(query, 3);
-      const processedDocs = results.map((doc: any) => ({
-        document: {
-          pageContent: doc.pageContent || (doc.metadata?.pageContent) || "",
-          metadata: { source: doc.metadata?.source || doc.metadata?.metadata?.source || "", chunkId: doc.metadata?.chunkId || doc.metadata?.metadata?.chunkId || "" }
-        } as Document,
-        similarityScore: (doc.score ?? 0.0)
-      }));
-      allResults.push(...processedDocs);
+    // Gunakan MMR search pada vector store
+    const results = await vectorStore.maxMarginalRelevanceSearch(query, {
+      k,
+      fetchK: fetch_k,
+      lambda,
+    });
+    const processedDocs = results.map((doc: any) => ({
+      document: {
+        pageContent: doc.pageContent || (doc.metadata?.pageContent) || "",
+        metadata: { source: doc.metadata?.source || doc.metadata?.metadata?.source || "", chunkId: doc.metadata?.chunkId || doc.metadata?.metadata?.chunkId || "" }
+      } as Document,
+      similarityScore: (doc.score ?? 0.0)
+    }));
+    allResults.push(...processedDocs);
   }
-  
-  const uniqueResults = Array.from(new Map(allResults.map(doc => [doc.document.pageContent, doc])).values());
-  console.log(`📊 Total unique results: ${uniqueResults.length}`);
+
+  // Deduplicate by pageContent
+  const uniqueResults: RetrievedDocument[] = Array.from(new Map(allResults.map(doc => [doc.document.pageContent, doc])).values());
+
+  console.log(`📊 Total unique results after MMR per query: ${uniqueResults.length}`);
   return { retrieved_documents: uniqueResults, step: 'documents_retrieved' };
 }, { name: 'retrieve_documents' });
 
