@@ -18,13 +18,16 @@ export class Settings {
   
   // Gemini API Keys (support multiple keys)
   static getGeminiApiKeys(): string[] {
-    const keys: string[] = [];
-    for (let i = 1; i <= 10; i++) {
-      const key = process.env[`GEMINI_API_KEY_${i}`];
-      if (key) {
-        keys.push(key);
-      }
-    }
+    // Ambil semua env var yang namanya diawali GEMINI_API_KEY_
+    const keys = Object.entries(process.env)
+      .filter(([k, v]) => k.startsWith('GEMINI_API_KEY_') && v)
+      // Urutkan berdasarkan angka di belakangnya
+      .sort((a, b) => {
+        const numA = parseInt(a[0].replace('GEMINI_API_KEY_', ''), 10);
+        const numB = parseInt(b[0].replace('GEMINI_API_KEY_', ''), 10);
+        return numA - numB;
+      })
+      .map(([_, v]) => v as string);
     return keys;
   }
   
