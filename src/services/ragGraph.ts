@@ -99,7 +99,9 @@ const rerankDocuments = traceable(async (state: RAGState): Promise<Partial<RAGSt
   console.log('🔄 Reranking documents...');
   const docsToRerank = state.retrieved_documents || [];
   if (docsToRerank.length === 0) return { reranked_documents: [], step: 'reranking_skipped' };
-  const docsStr = docsToRerank.map((doc, i) => `Dokumen ${i + 1}: ${doc.document.pageContent}`).join('\n\n');
+  const similarityThreshold = 0.8;
+
+  // Prompt template tetap sama
   const systemPrompt = `Anda adalah ahli dalam mengevaluasi relevansi dokumen terhadap pertanyaan. Tugas Anda adalah memberikan skor similarity (0.0 - 1.0) untuk setiap dokumen berdasarkan seberapa relevan dokumen tersebut terhadap pertanyaan yang diberikan.
 
 PENTING: JANGAN MENGUBAH ISI DOKUMEN. Berikan skor berdasarkan dokumen yang ada tanpa menambah atau mengurangi teks. PASTIKAN array \`rerankedDocuments\` berisi objek untuk SETIAP dokumen yang diberikan dalam urutan yang sama.
@@ -119,37 +121,38 @@ Berikan skor dalam format JSON dengan struktur:
     }
   ]
 }`;
-  const userPrompt = `- Pertanyaan:
-${state.question}
-- Dokumen untuk direrank (JANGAN UBAH ISI DOKUMEN, HANYA BERIKAN SKOR):
-${docsStr}`;
-  const llm = await getCurrentLlm();
-  const text = await invokeWithRetry(llm, [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]);
-  
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  let rerankResult;
-  try {
-      rerankResult = jsonMatch ? JSON.parse(jsonMatch[0]) : { rerankedDocuments: [] };
-  } catch {
-      rerankResult = { rerankedDocuments: [] };
-  }
 
-  const newContext: RetrievedDocument[] = [];
-  const similarityThreshold = 0.8;
-  
-  // Match by index, assuming the reranker preserves the order and number of documents as instructed.
-  // This is more robust than matching by page content, which can be altered by the LLM.
-  (rerankResult.rerankedDocuments || []).forEach((rerankedDoc: { document: string; similarityScore: number; }, index: number) => {
-    if (rerankedDoc.similarityScore >= similarityThreshold) {
-      if (index < docsToRerank.length) {
-        const originalDoc = docsToRerank[index];
-        newContext.push({ document: originalDoc.document, similarityScore: rerankedDoc.similarityScore });
-      }
+  // Rerank per dokumen secara paralel
+  const rerankPromises = docsToRerank.map(async (doc, i) => {
+    const docsStr = `Dokumen 1: ${doc.document.pageContent}`;
+    const userPrompt = `- Pertanyaan:\n${state.question}\n- Dokumen untuk direrank (JANGAN UBAH ISI DOKUMEN, HANYA BERIKAN SKOR):\n${docsStr}`;
+    const llm = await getCurrentLlm();
+    const text = await invokeWithRetry(llm, [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ]);
+    // Ambil hasil JSON dari output LLM
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    let rerankResult;
+    try {
+      rerankResult = jsonMatch ? JSON.parse(jsonMatch[0]) : { rerankedDocuments: [] };
+    } catch {
+      rerankResult = { rerankedDocuments: [] };
     }
+    // Ambil similarityScore dari hasil LLM
+    const score = (rerankResult.rerankedDocuments && rerankResult.rerankedDocuments[0]?.similarityScore) || 0.0;
+    return {
+      document: doc.document,
+      similarityScore: score
+    };
   });
-  
-  console.log(`📊 Reranking complete: ${newContext.length} documents retained`);
-  return { reranked_documents: newContext, step: 'documents_reranked' };
+
+  // Jalankan semua rerank secara paralel
+  const rerankedDocs: RetrievedDocument[] = (await Promise.all(rerankPromises))
+    .filter(doc => doc.similarityScore >= similarityThreshold);
+
+  console.log(`📊 Reranking complete: ${rerankedDocs.length} documents retained`);
+  return { reranked_documents: rerankedDocs, step: 'documents_reranked' };
 }, { name: 'rerank_documents' });
 
 const generateAnswer = traceable(async (state: RAGState): Promise<Partial<RAGState>> => {
