@@ -44,7 +44,7 @@ app.use(express.json());
 app.get('/', (_req, res) => {
   res.json({ 
     message: 'API is running',
-    version: '1.0.0',
+    version: '1.1.0',
     features: ['RAG', 'API Key Management', 'LangGraph', 'LangSmith'],
     timestamp: new Date().toISOString()
   });

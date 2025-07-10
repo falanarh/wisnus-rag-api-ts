@@ -110,6 +110,7 @@ const rerankDocuments = traceable(async (state: RAGState): Promise<Partial<RAGSt
   const docsToRerank = state.retrieved_documents || [];
   if (docsToRerank.length === 0) return { reranked_documents: [], step: 'reranking_skipped' };
   const similarityThreshold = 0.8;
+  const BATCH_SIZE = 3;
 
   // Prompt template tetap sama
   const systemPrompt = `Anda adalah ahli dalam mengevaluasi relevansi dokumen terhadap pertanyaan. Tugas Anda adalah memberikan skor similarity (0.0 - 1.0) untuk setiap dokumen berdasarkan seberapa relevan dokumen tersebut terhadap pertanyaan yang diberikan.
@@ -132,9 +133,19 @@ Berikan skor dalam format JSON dengan struktur:
   ]
 }`;
 
-  // Rerank per dokumen secara paralel
-  const rerankPromises = docsToRerank.map(async (doc, i) => {
-    const docsStr = `Dokumen 1: ${doc.document.pageContent}`;
+  // Fungsi untuk membagi dokumen menjadi batch
+  function chunkArray<T>(arr: T[], size: number): T[][] {
+    const result: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) {
+      result.push(arr.slice(i, i + size));
+    }
+    return result;
+  }
+
+  // Rerank dokumen per batch (maksimal 3 dokumen per request)
+  const batches = chunkArray(docsToRerank, BATCH_SIZE);
+  const rerankBatchPromises = batches.map(async (batch, batchIdx) => {
+    const docsStr = batch.map((doc, i) => `Dokumen ${i + 1}: ${doc.document.pageContent}`).join('\n\n');
     const userPrompt = `- Pertanyaan:\n${state.question}\n- Dokumen untuk direrank (JANGAN UBAH ISI DOKUMEN, HANYA BERIKAN SKOR):\n${docsStr}`;
     const llm = await getCurrentLlm();
     const text = await invokeWithRetry(llm, [
@@ -150,15 +161,16 @@ Berikan skor dalam format JSON dengan struktur:
       rerankResult = { rerankedDocuments: [] };
     }
     // Ambil similarityScore dari hasil LLM
-    const score = (rerankResult.rerankedDocuments && rerankResult.rerankedDocuments[0]?.similarityScore) || 0.0;
-    return {
-      document: doc.document,
-      similarityScore: score
-    };
+    const rerankedBatch = (rerankResult.rerankedDocuments || []).map((item: any, i: number) => ({
+      document: batch[i].document,
+      similarityScore: item.similarityScore || 0.0
+    }));
+    return rerankedBatch;
   });
 
-  // Jalankan semua rerank secara paralel
-  const rerankedDocs: RetrievedDocument[] = (await Promise.all(rerankPromises))
+  // Gabungkan hasil dari semua batch
+  const rerankedDocs: RetrievedDocument[] = (await Promise.all(rerankBatchPromises))
+    .flat()
     .filter(doc => doc.similarityScore >= similarityThreshold);
 
   console.log(`📊 Reranking complete: ${rerankedDocs.length} documents retained`);
@@ -169,15 +181,21 @@ const generateAnswer = traceable(async (state: RAGState): Promise<Partial<RAGSta
   console.log('💡 Generating answer...');
   
   // Robustly select documents: Use reranked if available and non-empty, otherwise fallback to retrieved.
-  const documents = (state.reranked_documents && state.reranked_documents.length > 0)
-    ? state.reranked_documents
+  const hasReranked = Array.isArray(state.reranked_documents) && state.reranked_documents.length > 0;
+  const documents: RetrievedDocument[] = hasReranked
+    ? state.reranked_documents || []
     : state.retrieved_documents || [];
-  
+
+  // Jika tidak ada dokumen sama sekali (retrieved juga kosong)
   if (documents.length === 0) return { answer: 'Maaf, saya tidak dapat menemukan informasi yang relevan untuk pertanyaan Anda.', step: 'no_documents' };
-  
-  const contextText = documents.map(doc => doc.document.pageContent).join('\n\n');
-  
-  const ANSWER_TEMPLATE = `Anda adalah asisten yang hanya boleh menjawab pertanyaan berdasarkan potongan konteks yang disediakan di bawah ini. Ikuti instruksi berikut dengan cermat:
+
+  let prompt = '';
+  let systemPrompt = '';
+
+  if (hasReranked) {
+    // === CASE 1: Ada dokumen yang memenuhi threshold, gunakan prompt lama ===
+    const contextText = documents.map(doc => doc.document.pageContent).join('\n\n');
+    const ANSWER_TEMPLATE = `Anda adalah asisten yang hanya boleh menjawab pertanyaan berdasarkan potongan konteks yang disediakan di bawah ini. Ikuti instruksi berikut dengan cermat:
 
 1. Bacalah seluruh potongan konteks.
 2. Pastikan Anda memberikan jawaban yang semirip mungkin dengan pengetahuan pada konteks yang diberikan.
@@ -198,21 +216,121 @@ Pengetahuan yang Anda miliki: {context}
 Pertanyaan: {question}
 
 Jawaban yang Bermanfaat:`;
+    prompt = ANSWER_TEMPLATE
+      .replace('{context}', contextText)
+      .replace('{question}', state.question);
+    systemPrompt = 'Anda adalah asisten cerdas yang membantu menjawab pertanyaan berdasarkan konteks.';
+  } else {
+    // === CASE 2: Tidak ada dokumen yang memenuhi threshold, gunakan prompt pengetahuan umum + lampiran dokumen ===
+    // Ambil dokumen retrieval (meskipun similarity rendah)
+    const retrievedDocs = state.retrieved_documents || [];
+    const contextText = retrievedDocs.length > 0
+      ? retrievedDocs.map((doc, i) => `Dokumen ${i + 1}: ${doc.document.pageContent}`).join('\n\n')
+      : '-';
+    const GENERAL_KNOWLEDGE_TEMPLATE = `Anda adalah asisten yang menjawab pertanyaan berdasarkan pengetahuan umum yang Anda miliki. Namun, Anda juga harus melampirkan dokumen-dokumen hasil pencarian berikut sebagai referensi tambahan, meskipun dokumen-dokumen ini tidak sepenuhnya relevan dengan pertanyaan. Ikuti instruksi berikut:
 
-  const prompt = ANSWER_TEMPLATE
-    .replace('{context}', contextText)
-    .replace('{question}', state.question);
-  
+1. Jawablah pertanyaan pengguna sebaik mungkin berdasarkan pengetahuan umum Anda.
+2. Setelah jawaban utama, lampirkan dokumen-dokumen hasil pencarian yang tersedia di bawah ini sebagai referensi, tanpa mengklaim bahwa dokumen tersebut relevan.
+3. Akhiri jawaban Anda dengan teks "(Sumber: Pengetahuan umum). Terima kasih sudah bertanya!" (tanpa baris baru).
+4. Jangan menuliskan "(Sumber: Dokumen [nomor])" atau sumber lain selain "(Sumber: Pengetahuan umum)".
+
+Dokumen hasil pencarian:
+{context}
+
+Pertanyaan: {question}
+
+Jawaban yang Bermanfaat:`;
+    prompt = GENERAL_KNOWLEDGE_TEMPLATE
+      .replace('{context}', contextText)
+      .replace('{question}', state.question);
+    systemPrompt = 'Anda adalah asisten cerdas yang membantu menjawab pertanyaan berdasarkan pengetahuan umum dan melampirkan dokumen hasil pencarian.';
+  }
+
   const llm = await getCurrentLlm();
-  const text = await invokeWithRetry(llm, [{ role: 'system', content: 'Anda adalah asisten cerdas yang membantu menjawab pertanyaan berdasarkan konteks.' }, { role: 'user', content: prompt }]);
-  
-  const answer = text.replace(/\(Sumber: Dokumen\s*\d+\)/g, '(Sumber: Badan Pusat Statistik)')
-                     .replace(/\(Sumber: Dokumen\s*\[.*?\]\)/g, '(Sumber: Badan Pusat Statistik)');
-                     
+  const text = await invokeWithRetry(llm, [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: prompt }
+  ]);
+
+  // Normalisasi sumber
+  let answer = text.replace(/\(Sumber: Dokumen\s*\d+\)/g, '(Sumber: Badan Pusat Statistik)')
+                   .replace(/\(Sumber: Dokumen\s*\[.*?\]\)/g, '(Sumber: Badan Pusat Statistik)');
+  if (!hasReranked) {
+    // Paksa sumber pengetahuan umum jika tidak ada dokumen relevan
+    answer = answer.replace(/\(Sumber: Badan Pusat Statistik\)/g, '(Sumber: Pengetahuan umum)');
+    if (!answer.includes('(Sumber: Pengetahuan umum)')) {
+      // Pastikan selalu ada sumber pengetahuan umum
+      answer = answer.trim();
+      if (!answer.endsWith('.')) answer += '.';
+      answer += ' (Sumber: Pengetahuan umum). Terima kasih sudah bertanya!';
+    }
+  }
+
   const sources = documents.map(doc => doc.document.metadata?.source || 'Unknown source');
   console.log('✅ Answer generated successfully');
   return { answer, sources, context: documents, step: 'answer_generated' };
 }, { name: 'generate_answer' });
+
+const evaluateAndImproveAnswer = traceable(async (state: RAGState): Promise<Partial<RAGState>> => {
+  console.log('📝 Evaluating and improving answer...');
+  const { question, answer, context } = state;
+  // Gabungkan dokumen konteks
+  const contextText = (context && context.length > 0)
+    ? context.map(doc => doc.document.pageContent).join('\n\n')
+    : '-';
+
+  const EVAL_SYSTEM_PROMPT = `Anda adalah evaluator jawaban LLM. Tugas Anda adalah menilai kualitas jawaban LLM atas pertanyaan user berdasarkan dokumen konteks yang digunakan. Jika jawaban sudah memuaskan dan sesuai konteks, kembalikan jawaban apa adanya. Jika jawaban kurang memuaskan, Anda diperbolehkan melengkapi jawaban dengan pengetahuan umum yang Anda miliki agar jawaban lebih baik dan benar-benar menjawab pertanyaan user. Jika Anda menambahkan pengetahuan umum, gunakan struktur sumber '(Sumber: Pengetahuan umum)' di akhir jawaban seperti pada instruksi sebelumnya.\nPENTING: Hanya kembalikan jawaban akhir saja tanpa penjelasan, alasan, atau evaluasi apapun.`;
+
+  const EVAL_USER_PROMPT = `Pertanyaan user:\n${question}\n\nJawaban LLM:\n${answer}\n\nDokumen konteks:\n${contextText}\n\nTugas Anda:\n1. Nilai apakah jawaban LLM sudah memuaskan dan sesuai konteks.\n2. Jika sudah memuaskan, kembalikan jawaban apa adanya.\n3. Jika kurang memuaskan, perbaiki/lengkapi jawaban dengan pengetahuan umum Anda agar lebih baik dan benar-benar menjawab pertanyaan user.\n4. Jika Anda menambahkan pengetahuan umum, gunakan struktur sumber '(Sumber: Pengetahuan umum)' di akhir jawaban seperti pada instruksi sebelumnya.\n5. Hanya kembalikan jawaban akhir saja tanpa penjelasan, alasan, atau evaluasi apapun.`;
+
+  const llm = await getCurrentLlm();
+  const improvedAnswer = await invokeWithRetry(llm, [
+    { role: 'system', content: EVAL_SYSTEM_PROMPT },
+    { role: 'user', content: EVAL_USER_PROMPT }
+  ]);
+
+  // Normalisasi sumber jika perlu
+  let finalAnswer = improvedAnswer.replace(/\(Sumber: Dokumen\s*\d+\)/g, '(Sumber: Badan Pusat Statistik)')
+                                  .replace(/\(Sumber: Dokumen\s*\[.*?\]\)/g, '(Sumber: Badan Pusat Statistik)');
+  // Jika evaluator menambahkan pengetahuan umum, pastikan format sumber benar
+  if (!finalAnswer.includes('(Sumber: Badan Pusat Statistik)') && !finalAnswer.includes('(Sumber: Pengetahuan umum)')) {
+    finalAnswer = finalAnswer.trim();
+    if (!finalAnswer.endsWith('.')) finalAnswer += '.';
+    finalAnswer += ' (Sumber: Pengetahuan umum). Terima kasih sudah bertanya!';
+  }
+
+  // --- POST-PROCESSING: Hapus duplikasi sumber ---
+  // Ambil semua sumber yang valid
+  const sumberRegex = /\(Sumber: ([^)]+)\)/g;
+  let sumberMatches = [];
+  let match;
+  while ((match = sumberRegex.exec(finalAnswer)) !== null) {
+    sumberMatches.push(match[0]);
+  }
+  // Pilih sumber terpanjang (paling lengkap)
+  let sumberFinal = sumberMatches.length > 0 ? sumberMatches.reduce((a, b) => (a.length >= b.length ? a : b)) : '';
+  // Hapus semua sumber, sisakan satu di akhir sebelum 'Terima kasih sudah bertanya!'
+  if (sumberFinal) {
+    // Hapus semua sumber
+    finalAnswer = finalAnswer.replace(sumberRegex, '');
+    // Hapus spasi/". " berlebih
+    finalAnswer = finalAnswer.replace(/\s*\.+\s*$/, '');
+    // Sisipkan sumberFinal sebelum "Terima kasih sudah bertanya!"
+    finalAnswer = finalAnswer.replace(/(\.?\s*)?Terima kasih sudah bertanya!$/, match => {
+      return `${sumberFinal}. Terima kasih sudah bertanya!`;
+    });
+    // Jika tidak ada "Terima kasih sudah bertanya!", tambahkan di akhir
+    if (!/Terima kasih sudah bertanya!$/.test(finalAnswer)) {
+      finalAnswer = finalAnswer.trim();
+      if (!finalAnswer.endsWith('.')) finalAnswer += '.';
+      finalAnswer += ` ${sumberFinal}. Terima kasih sudah bertanya!`;
+    }
+    // Rapikan titik ganda
+    finalAnswer = finalAnswer.replace(/\.(\s*)\./g, '.');
+  }
+
+  return { answer: finalAnswer, step: 'answer_evaluated' };
+}, { name: 'evaluate_and_improve_answer' });
 
 // The main pipeline is also traceable, creating the root span.
 const executeRAGPipelineTraceable = traceable(async (initialState: RAGState, vectorStore: MongoDBAtlasVectorSearch): Promise<RAGState> => {
@@ -222,6 +340,7 @@ const executeRAGPipelineTraceable = traceable(async (initialState: RAGState, vec
     state = { ...state, ...(await retrieveDocuments(state, vectorStore)) };
     state = { ...state, ...(await rerankDocuments(state)) };
     state = { ...state, ...(await generateAnswer(state)) };
+    state = { ...state, ...(await evaluateAndImproveAnswer(state)) };
     return state;
   } catch (error: any) {
     console.error('❌ Pipeline execution error:', error);
