@@ -20,7 +20,7 @@ const getFallbackApiKey = (): string => {
 };
 
 // LangChain ChatGoogleGenerativeAI wrapper with API key management
-export const getCurrentLlm = async (model: string = 'gemini-2.0-flash-lite') => {
+export const getCurrentLlm = async (model: string = 'gemini-2.0-flash') => {
   try {
     // Try to use API key manager first
     const apiKeyManager = await getApiKeyManager();
